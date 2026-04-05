@@ -17,8 +17,11 @@ Content-addressed blob storage over HTTP with BIP-340 Schnorr authorization via 
 - **Database layer** — metadata persistence with SQLite/Postgres via SQLx
 - **Access control** — whitelist with hot-reload, custom policies via trait
 - **File statistics** — lock-free egress tracking with DashMap accumulator
+- **Observability** — OTEL-compatible structured tracing with opt-in OTLP export
 - **NIP-96** — Nostr file storage protocol endpoints
 - **BUD-01/02/04/06** — core Blossom protocol + list, mirror, upload requirements
+- **Media processing** — WebP conversion, thumbnails, blurhash, EXIF validation (feature-gated)
+- **Content labeling** — pluggable classification traits for moderation (feature-gated)
 - **Trait-based** — implement `BlossomSigner`, `BlobBackend`, `BlobDatabase`, `AccessControl`, `MediaProcessor`, or `MediaLabeler` for your own types
 
 ## Quick Start
@@ -76,7 +79,7 @@ let data = client.download(&desc.sha256).await?;
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `server` | yes | Axum BlobServer and router |
+| `server` | yes | Axum BlobServer and router with TraceLayer |
 | `client` | yes | reqwest BlossomClient with multi-server failover |
 | `filesystem` | yes | FilesystemBackend (persistent, restart-safe) |
 | `s3` | no | S3/R2/MinIO backend via `aws-sdk-s3` |
@@ -85,6 +88,7 @@ let data = client.download(&desc.sha256).await?;
 | `db-postgres` | no | PostgreSQL metadata backend via SQLx |
 | `media` | no | Image processing (WebP, thumbnails, blurhash, EXIF) |
 | `labels` | no | Content classification (Vision Transformer, LLM API) |
+| `otel` | no | OpenTelemetry OTLP export (Jaeger, Tempo, Seq, Honeycomb) |
 
 ## Protocol Support
 
@@ -110,14 +114,40 @@ MediaProcessor — image/video processing (Passthrough, ImageProcessor)
 MediaLabeler   — content classification (Noop, BlockAll, custom)
 ```
 
-Storage backends use synchronous interfaces wrapped in `Arc<Mutex<>>` by the async server. This matches the common commutator pattern where registry adapters use `std::sync::Mutex`.
+Storage backends use synchronous interfaces wrapped in `Arc<Mutex<>>` by the async server.
+
+## Observability
+
+All key functions are instrumented with `#[tracing::instrument]` using [OTEL semantic conventions](https://opentelemetry.io/docs/specs/semconv/):
+
+| Namespace | Fields |
+|-----------|--------|
+| `http.*` | `method`, `route`, `status_code` |
+| `blob.*` | `sha256`, `size`, `content_type` |
+| `auth.*` | `pubkey`, `action`, `kind` |
+| `storage.*` | `backend`, `data_dir`, `bucket` |
+| `server.*` | `url` |
+| `error.*` | `message` |
+
+**Zero-cost by default** — `tracing` is a no-op without a subscriber.
+
+**Opt-in OTLP export** for Jaeger, Grafana Tempo, Seq, Honeycomb, etc.:
+
+```toml
+blossom-rs = { version = "0.1", features = ["otel"] }
+```
+
+```rust
+// Exports to OTEL_EXPORTER_OTLP_ENDPOINT (default: http://localhost:4317)
+let _guard = blossom_rs::otel::init_tracing("my-server", "info")?;
+```
 
 ## Testing
 
 ```bash
-cargo test               # 90 tests (unit + integration + property)
+cargo test                # 96 tests (unit + integration + property)
 cargo test --all-features # With all feature gates
-cargo llvm-cov           # Coverage report (91.6% line coverage)
+cargo llvm-cov            # Coverage report (~92% line coverage)
 ```
 
 ## CI/CD

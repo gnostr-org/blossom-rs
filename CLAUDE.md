@@ -12,28 +12,31 @@ Repository: `MonumentalSystems/blossom-rs`
 
 ```bash
 cargo build                          # Build with default features (server, client, filesystem)
-cargo build --all-features           # Build everything including s3, s3-compat
-cargo test                           # Run all tests
+cargo build --all-features           # Build everything including s3, otel, media, etc.
+cargo test                           # Run all tests (96 tests)
 cargo test --all-features            # Run tests with all feature gates
 cargo clippy -- -D warnings          # Lint (CI enforces zero warnings)
 cargo fmt --check                    # Format check (CI enforces)
 cargo fmt                            # Auto-format
 cargo doc --no-deps --open           # Generate and view docs
+cargo llvm-cov                       # Coverage report (~92% line coverage)
+cargo publish --dry-run              # Verify crates.io packaging
 ```
 
 ## Feature Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `server` | yes | Axum BlobServer and router |
+| `server` | yes | Axum BlobServer and router with TraceLayer |
 | `client` | yes | reqwest BlossomClient with multi-server failover |
 | `filesystem` | yes | FilesystemBackend (persistent, restart-safe) |
 | `s3` | no | S3/R2/MinIO backend via aws-sdk-s3 |
 | `s3-compat` | no | S3-compat test router (requires `server`) |
 | `db-sqlite` | no | SQLite metadata backend via SQLx |
 | `db-postgres` | no | PostgreSQL metadata backend via SQLx |
-| `media` | no | Media processing (WebP, thumbnails, blurhash, EXIF) |
+| `media` | no | Image processing (WebP, thumbnails, blurhash, EXIF) |
 | `labels` | no | Content labeling (Vision Transformer, LLM API) |
+| `otel` | no | OpenTelemetry OTLP export (Jaeger, Tempo, Seq) |
 
 ## Architecture
 
@@ -43,6 +46,7 @@ cargo doc --no-deps --open           # Generate and view docs
 src/
 ├── lib.rs              — Public API, feature-gated re-exports
 ├── protocol.rs         — NostrEvent, BlobDescriptor, base64url, sha256_hex, compute_event_id
+├── otel.rs             — OTEL init helper, TracingGuard (feature-gated)
 ├── auth/
 │   ├── mod.rs          — build_blossom_auth, verify_blossom_auth, AuthError
 │   └── signer.rs       — BlossomSigner trait, default Signer (secp256k1 BIP-340)
@@ -52,23 +56,23 @@ src/
 │   ├── filesystem.rs   — FilesystemBackend (sha256.blob files, index scan on startup)
 │   └── s3.rs           — S3Backend (aws-sdk-s3, optional CDN URL)
 ├── db/
-│   ├── mod.rs          — BlobDatabase trait
+│   ├── mod.rs          — BlobDatabase trait, UploadRecord, UserRecord, FileStats, DbError
 │   ├── memory.rs       — MemoryDatabase (in-process, no persistence)
 │   ├── sqlite.rs       — SqliteDatabase (SQLx)
 │   └── postgres.rs     — PostgresDatabase (SQLx)
 ├── server/
-│   ├── mod.rs          — BlobServer (Axum router), all HTTP handlers
-│   ├── nip96.rs        — NIP-96 endpoints
-│   └── admin.rs        — Admin endpoints
+│   ├── mod.rs          — BlobServer, BlobServerBuilder, HTTP handlers, TraceLayer
+│   └── nip96.rs        — NIP-96 endpoints (info, upload, list, delete)
 ├── client/
 │   └── mod.rs          — BlossomClient with failover + SHA256 integrity
 ├── access/
-│   └── mod.rs          — AccessControl trait, Whitelist
+│   └── mod.rs          — AccessControl trait, OpenAccess, Whitelist (hot-reload)
 ├── media/
-│   └── mod.rs          — MediaProcessor trait, WebP/thumbnail/blurhash/EXIF
+│   ├── mod.rs          — MediaProcessor trait, PassthroughProcessor
+│   └── image_processor.rs — ImageProcessor (feature-gated: WebP, thumbnail, blurhash, EXIF)
 ├── labels/
-│   └── mod.rs          — MediaLabeler trait, VitLabeler, LlmLabeler
-└── stats.rs            — File statistics (DashMap + atomic counters)
+│   └── mod.rs          — MediaLabeler trait, NoopLabeler, BlockAllLabeler
+└── stats.rs            — StatsAccumulator (DashMap + atomic counters, DB flush)
 ```
 
 ### Key Traits
@@ -76,7 +80,7 @@ src/
 - **`BlossomSigner`** — BIP-340 signing. Implement for your identity type.
 - **`BlobBackend`** — Synchronous blob storage (Memory, Filesystem, S3). Wrapped in `Arc<Mutex<>>` by server.
 - **`BlobDatabase`** — Metadata persistence (uploads, users, quotas, stats).
-- **`AccessControl`** — Authorization decisions (whitelist, role-based).
+- **`AccessControl`** — Authorization decisions (OpenAccess, Whitelist, custom).
 - **`MediaProcessor`** — Image/video processing pipeline.
 - **`MediaLabeler`** — Content classification.
 
@@ -86,12 +90,30 @@ src/
 - Traits for all extension points; concrete types behind feature flags
 - Sync trait interfaces wrapped in `Arc<Mutex<>>` for async handlers
 - `thiserror` for all error enums
-- `tracing` for structured logging (no-op if subscriber not configured)
+- `tracing` with `#[instrument]` and OTEL semantic convention field names
 - `serde` derive on all public types; optional fields use `skip_serializing_if`
 - Axum 0.7 route syntax (`:param` not `{param}`)
 
+### Tracing / Observability
+
+All key functions are instrumented with `#[tracing::instrument]`. Field naming
+follows OTEL semantic conventions:
+
+- `http.method`, `http.route`, `http.status_code` — from TraceLayer
+- `blob.sha256`, `blob.size`, `blob.content_type` — blob identity
+- `auth.pubkey`, `auth.action`, `auth.kind` — Nostr auth context
+- `storage.backend`, `storage.data_dir`, `storage.bucket` — backend info
+- `server.url` — which server handled a client request
+- `error.message` — structured error context
+- `otel.name`, `otel.kind` — span metadata
+
+Zero-cost when no `tracing` subscriber is configured. Enable the `otel`
+feature for OTLP export to Jaeger, Grafana Tempo, Seq, etc.
+
 ## Testing Conventions
 
+- 96 tests: 73 unit + 18 integration + 5 property (proptest)
+- 92% line coverage across all modules
 - Unit tests in `#[cfg(test)] mod tests` at bottom of each module
 - Async integration tests use `#[tokio::test]` with ephemeral TCP listeners
 - Server tests spawn a real Axum server on `127.0.0.1:0` (random port)
@@ -117,20 +139,20 @@ src/
 ## Protocol References
 
 - **BUD-01**: Core blob upload/download/delete (implemented)
-- **BUD-02**: List blobs by pubkey
-- **BUD-04**: Mirror from remote URL
-- **BUD-05**: Media optimization (server-side compression)
-- **BUD-06**: Upload requirements advertisement
-- **NIP-96**: Nostr file storage protocol
+- **BUD-02**: List blobs by pubkey (implemented)
+- **BUD-04**: Mirror from remote URL (implemented)
+- **BUD-06**: Upload requirements advertisement (implemented)
+- **NIP-96**: Nostr file storage protocol (implemented)
 - **NIP-01**: Nostr event format (used for auth)
 - **BIP-340**: Schnorr signatures on secp256k1
 
 ## Dependencies Policy
 
-- Minimal dependency tree for core (crypto + serde + tokio)
+- Minimal dependency tree for core (crypto + serde + tokio + tracing)
 - Optional deps behind feature flags
 - `secp256k1` 0.29 for BIP-340 (matches ecosystem)
 - `axum` 0.7 for server
 - `reqwest` 0.12 for client
 - `sqlx` for database backends
+- `tracing` + `tracing-opentelemetry` for observability
 - No `unsafe` code

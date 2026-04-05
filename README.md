@@ -147,8 +147,26 @@ let _guard = blossom_rs::otel::init_tracing("my-server", "info")?;
 ```bash
 cargo test                # 96 tests (unit + integration + property)
 cargo test --all-features # With all feature gates
-cargo llvm-cov            # Coverage report (~92% line coverage)
+cargo llvm-cov            # Coverage report
 ```
+
+### Code Coverage — 95.3% line coverage
+
+| Module | Lines | Coverage |
+|--------|-------|----------|
+| `server/nip96.rs` | 280 | **99.3%** |
+| `server/mod.rs` | 550 | **98.4%** |
+| `protocol.rs` | 115 | **95.7%** |
+| `db/memory.rs` | 205 | **96.6%** |
+| `labels/mod.rs` | 81 | **96.3%** |
+| `stats.rs` | 119 | **95.8%** |
+| `storage/memory.rs` | 53 | **94.3%** |
+| `auth/mod.rs` | 124 | **93.6%** |
+| `access/mod.rs` | 116 | **90.5%** |
+| `storage/filesystem.rs` | 86 | **90.7%** |
+| `auth/signer.rs` | 71 | **90.1%** |
+| `client/mod.rs` | 28 | **89.3%** |
+| **Total** | **1913** | **95.3%** |
 
 ## CI/CD
 

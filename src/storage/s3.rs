@@ -103,9 +103,9 @@ impl S3Backend {
         }
 
         tracing::info!(
-            component = "blossom.storage.s3",
-            bucket = %self.config.bucket,
-            existing_blobs = self.index.len(),
+            storage.backend = "s3",
+            storage.bucket = %self.config.bucket,
+            storage.existing_blobs = self.index.len(),
             "initialized S3 blob storage"
         );
 
@@ -151,9 +151,9 @@ impl BlobBackend for S3Backend {
 
         if let Err(e) = result {
             tracing::warn!(
-                component = "blossom.storage.s3",
-                blob_sha = %hash,
-                error = %e,
+                storage.backend = "s3",
+                blob.sha256 = %hash,
+                error.message = %e,
                 "failed to upload blob to S3"
             );
         }
@@ -194,9 +194,9 @@ impl BlobBackend for S3Backend {
                     Ok(b) => Some(b.into_bytes().to_vec()),
                     Err(e) => {
                         tracing::warn!(
-                            component = "blossom.storage.s3",
-                            blob_sha = %sha256,
-                            error = %e,
+                            storage.backend = "s3",
+                            blob.sha256 = %sha256,
+                            error.message = %e,
                             "failed to read S3 object body"
                         );
                         None

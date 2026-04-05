@@ -25,6 +25,7 @@ use axum::{
     Json, Router,
 };
 use tokio::sync::Mutex;
+use tracing::{info, instrument, warn};
 
 use crate::access::{AccessControl, Action, OpenAccess};
 use crate::auth::{verify_blossom_auth, AuthError};
@@ -169,6 +170,13 @@ impl BlobServer {
     }
 
     /// Build the Axum router for this server.
+    ///
+    /// The router includes a `tower_http::trace::TraceLayer` that emits
+    /// structured spans for every HTTP request. When a `tracing` subscriber
+    /// is configured (e.g., `tracing-opentelemetry` for OTLP export, or
+    /// `tracing-subscriber` for JSON logs to Seq), each request produces
+    /// spans with `http.method`, `http.route`, and `http.status_code` fields
+    /// following OTEL semantic conventions.
     pub fn router(&self) -> Router {
         Router::new()
             .route("/upload", put(handle_upload))
@@ -184,6 +192,32 @@ impl BlobServer {
             .route("/status", get(handle_status))
             .with_state(self.state.clone())
             .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
+            .layer(
+                tower_http::trace::TraceLayer::new_for_http()
+                    .make_span_with(|request: &axum::http::Request<_>| {
+                        tracing::info_span!(
+                            "blossom.http.request",
+                            http.method = %request.method(),
+                            http.route = %request.uri().path(),
+                            http.status_code = tracing::field::Empty,
+                            otel.name = %format!("{} {}", request.method(), request.uri().path()),
+                            otel.kind = "server",
+                        )
+                    })
+                    .on_response(
+                        |response: &axum::http::Response<_>,
+                         latency: std::time::Duration,
+                         span: &tracing::Span| {
+                            span.record("http.status_code", response.status().as_u16());
+                            tracing::info!(
+                                parent: span,
+                                http.status_code = response.status().as_u16(),
+                                latency_ms = latency.as_millis() as u64,
+                                "response"
+                            );
+                        },
+                    ),
+            )
     }
 }
 
@@ -214,13 +248,16 @@ fn error_json(msg: &str) -> Json<serde_json::Value> {
 // BUD-01: Upload
 // ---------------------------------------------------------------------------
 
+#[instrument(name = "blossom.upload", skip_all, fields(blob.size, blob.sha256, auth.pubkey))]
 async fn handle_upload(
     State(state): State<SharedState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     let data = body.to_vec();
+    tracing::Span::current().record("blob.size", data.len() as u64);
     if data.is_empty() {
+        warn!("upload rejected: empty body");
         return (StatusCode::BAD_REQUEST, error_json("empty body"));
     }
 
@@ -279,8 +316,12 @@ async fn handle_upload(
     let base_url = s.base_url.clone();
     let descriptor = s.backend.insert(data, &base_url);
 
+    // Record span fields now that we know the sha256.
+    tracing::Span::current().record("blob.sha256", descriptor.sha256.as_str());
+
     // Record in database.
     let upload_pubkey = pubkey.unwrap_or_else(|| "anonymous".to_string());
+    tracing::Span::current().record("auth.pubkey", upload_pubkey.as_str());
     let record = UploadRecord {
         sha256: descriptor.sha256.clone(),
         size: descriptor.size,
@@ -293,6 +334,8 @@ async fn handle_upload(
     };
     let _ = s.database.record_upload(&record);
 
+    info!(blob.sha256 = %descriptor.sha256, blob.size = descriptor.size, "blob uploaded");
+
     (
         StatusCode::OK,
         Json(serde_json::to_value(descriptor).unwrap()),
@@ -303,6 +346,7 @@ async fn handle_upload(
 // BUD-01: Get / Head / Delete
 // ---------------------------------------------------------------------------
 
+#[instrument(name = "blossom.get", skip_all, fields(blob.sha256 = %sha256))]
 async fn handle_get_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
@@ -324,6 +368,7 @@ async fn handle_get_blob(
     }
 }
 
+#[instrument(name = "blossom.head", skip_all, fields(blob.sha256 = %sha256))]
 async fn handle_head_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
@@ -336,6 +381,7 @@ async fn handle_head_blob(
     }
 }
 
+#[instrument(name = "blossom.delete", skip_all, fields(blob.sha256 = %sha256))]
 async fn handle_delete_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
@@ -372,6 +418,7 @@ async fn handle_delete_blob(
 // BUD-02: List by pubkey
 // ---------------------------------------------------------------------------
 
+#[instrument(name = "blossom.list", skip_all, fields(list.pubkey = %pubkey))]
 async fn handle_list(
     State(state): State<SharedState>,
     Path(pubkey): Path<String>,
@@ -411,11 +458,14 @@ struct MirrorRequest {
     url: String,
 }
 
+#[instrument(name = "blossom.mirror", skip_all, fields(mirror.source_url))]
 async fn handle_mirror(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Json(req): Json<MirrorRequest>,
 ) -> impl IntoResponse {
+    tracing::Span::current().record("mirror.source_url", req.url.as_str());
+
     // Mirror requires auth.
     let pubkey = match extract_auth_event(&headers) {
         Ok(event) => {
@@ -530,6 +580,7 @@ async fn handle_mirror(
 // BUD-06: Upload requirements
 // ---------------------------------------------------------------------------
 
+#[instrument(name = "blossom.upload_requirements", skip_all)]
 async fn handle_upload_requirements(State(state): State<SharedState>) -> impl IntoResponse {
     let s = state.lock().await;
     Json(serde_json::to_value(&s.requirements).unwrap())
@@ -539,6 +590,7 @@ async fn handle_upload_requirements(State(state): State<SharedState>) -> impl In
 // Status
 // ---------------------------------------------------------------------------
 
+#[instrument(name = "blossom.status", skip_all)]
 async fn handle_status(State(state): State<SharedState>) -> impl IntoResponse {
     let s = state.lock().await;
     Json(serde_json::json!({

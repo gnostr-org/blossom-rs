@@ -76,9 +76,8 @@ impl StatsAccumulator {
         for (sha256, egress, _last) in self.drain() {
             if let Err(e) = db.record_access(&sha256, egress) {
                 tracing::warn!(
-                    component = "blossom.stats",
-                    blob_sha = %sha256,
-                    error = %e,
+                    blob.sha256 = %sha256,
+                    error.message = %e,
                     "failed to flush stats to database"
                 );
             }

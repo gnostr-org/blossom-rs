@@ -42,6 +42,7 @@ pub mod auth;
 pub mod db;
 pub mod labels;
 pub mod media;
+pub mod otel;
 pub mod protocol;
 pub mod stats;
 pub mod storage;

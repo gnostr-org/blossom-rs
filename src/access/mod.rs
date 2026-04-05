@@ -68,8 +68,8 @@ impl Whitelist {
         let mut keys = self.pubkeys.write().await;
         *keys = new_keys;
         tracing::info!(
-            component = "blossom.access",
-            count = keys.len(),
+            access.backend = "whitelist",
+            access.pubkey_count = keys.len(),
             "whitelist reloaded"
         );
         Ok(())

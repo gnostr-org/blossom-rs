@@ -16,6 +16,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use tracing::instrument;
+
 use super::{error_json, extract_auth_event, SharedState};
 use crate::access::Action;
 use crate::auth::verify_blossom_auth;
@@ -91,6 +93,7 @@ pub fn nip96_router(state: SharedState) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
 }
 
+#[instrument(name = "nip96.info", skip_all)]
 async fn handle_nip96_info(State(state): State<SharedState>) -> impl IntoResponse {
     let s = state.lock().await;
     let info = Nip96Info {
@@ -105,6 +108,7 @@ async fn handle_nip96_info(State(state): State<SharedState>) -> impl IntoRespons
     Json(info)
 }
 
+#[instrument(name = "nip96.upload", skip_all, fields(blob.size, blob.sha256, auth.pubkey))]
 async fn handle_nip96_upload(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -209,6 +213,7 @@ async fn handle_nip96_upload(
     )
 }
 
+#[instrument(name = "nip96.list", skip_all, fields(auth.pubkey))]
 async fn handle_nip96_list(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -272,6 +277,7 @@ async fn handle_nip96_list(
     }
 }
 
+#[instrument(name = "nip96.delete", skip_all, fields(blob.sha256 = %sha256))]
 async fn handle_nip96_delete(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,

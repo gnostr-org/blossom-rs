@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use tracing::info;
+use tracing::{info, instrument, warn};
 
 use super::{make_descriptor, BlobBackend};
 use crate::protocol::BlobDescriptor;
@@ -20,6 +20,11 @@ pub struct FilesystemBackend {
 impl FilesystemBackend {
     /// Create a new filesystem backend. Creates the directory if it doesn't exist.
     /// Scans for existing blobs on startup.
+    #[instrument(name = "blossom.storage.fs.init", skip_all, fields(
+        storage.backend = "filesystem",
+        storage.data_dir = %data_dir,
+        storage.existing_blobs,
+    ))]
     pub fn new(data_dir: &str) -> std::io::Result<Self> {
         let path = PathBuf::from(data_dir);
         std::fs::create_dir_all(&path)?;
@@ -37,10 +42,11 @@ impl FilesystemBackend {
             }
         }
 
+        tracing::Span::current().record("storage.existing_blobs", index.len());
         info!(
-            component = "blossom.storage",
-            data_dir = %path.display(),
-            existing_blobs = index.len(),
+            storage.backend = "filesystem",
+            storage.data_dir = %path.display(),
+            storage.existing_blobs = index.len(),
             "initialized filesystem blob storage"
         );
 
@@ -60,10 +66,10 @@ impl BlobBackend for FilesystemBackend {
         let desc = make_descriptor(&data, base_url);
         let path = self.blob_path(&desc.sha256);
         if let Err(e) = std::fs::write(&path, &data) {
-            tracing::warn!(
-                component = "blossom.storage",
-                blob_sha = %desc.sha256,
-                error = %e,
+            warn!(
+                storage.backend = "filesystem",
+                blob.sha256 = %desc.sha256,
+                error.message = %e,
                 "failed to write blob to disk"
             );
         }

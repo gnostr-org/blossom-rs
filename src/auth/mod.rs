@@ -8,11 +8,13 @@ mod signer;
 pub use signer::{BlossomSigner, Signer};
 
 use crate::protocol::{base64url_encode, compute_event_id, NostrEvent};
+use tracing::instrument;
 
 /// Build and sign a kind:24242 Blossom auth event.
 ///
 /// The event contains tags for the action type, optional blob SHA256,
 /// optional server URL, and a 60-second expiration for replay protection.
+#[instrument(name = "blossom.auth.build", skip(signer, content), fields(auth.action = action, auth.pubkey))]
 pub fn build_blossom_auth(
     signer: &dyn BlossomSigner,
     action: &str,
@@ -21,6 +23,7 @@ pub fn build_blossom_auth(
     content: &str,
 ) -> NostrEvent {
     let pubkey = signer.public_key_hex();
+    tracing::Span::current().record("auth.pubkey", pubkey.as_str());
     let created_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -66,6 +69,7 @@ pub fn auth_header_value(event: &NostrEvent) -> String {
 /// - Event signature is valid BIP-340 Schnorr
 /// - Event has not expired
 /// - Action tag matches expected action (if provided)
+#[instrument(name = "blossom.auth.verify", skip(event), fields(auth.pubkey = %event.pubkey, auth.kind = event.kind))]
 pub fn verify_blossom_auth(
     event: &NostrEvent,
     expected_action: Option<&str>,

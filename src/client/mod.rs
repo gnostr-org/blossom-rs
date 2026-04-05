@@ -5,7 +5,7 @@
 
 use crate::auth::{auth_header_value, build_blossom_auth, BlossomSigner};
 use crate::protocol::{sha256_hex, BlobDescriptor};
-use tracing::warn;
+use tracing::{info, instrument, warn};
 
 /// Async HTTP client for Blossom blob servers.
 ///
@@ -35,8 +35,16 @@ impl BlossomClient {
     ///
     /// Returns the blob descriptor with SHA256 hash. The hash is verified
     /// against the server's response to ensure integrity.
+    #[instrument(name = "blossom.client.upload", skip_all, fields(
+        blob.size = data.len(),
+        blob.sha256,
+        blob.content_type = content_type,
+        server.url,
+    ))]
     pub async fn upload(&self, data: &[u8], content_type: &str) -> Result<BlobDescriptor, String> {
         let our_sha256 = sha256_hex(data);
+        tracing::Span::current().record("blob.sha256", our_sha256.as_str());
+
         let auth_event =
             build_blossom_auth(self.signer.as_ref(), "upload", Some(&our_sha256), None, "");
         let auth_header = auth_header_value(&auth_event);
@@ -64,25 +72,30 @@ impl BlossomClient {
                             desc.sha256, our_sha256
                         ));
                     }
+                    tracing::Span::current().record("server.url", server.as_str());
+                    info!(
+                        blob.sha256 = %desc.sha256,
+                        blob.size = desc.size,
+                        server.url = %server,
+                        "blob uploaded"
+                    );
                     return Ok(desc);
                 }
                 Ok(resp) => {
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
                     warn!(
-                        component = "blossom.client",
-                        server = %server,
-                        status = %status,
-                        error = %text,
+                        server.url = %server,
+                        http.status_code = status.as_u16(),
+                        error.message = %text,
                         "upload failed, trying next server"
                     );
                     continue;
                 }
                 Err(e) => {
                     warn!(
-                        component = "blossom.client",
-                        server = %server,
-                        error = %e,
+                        server.url = %server,
+                        error.message = %e,
                         "upload request error, trying next server"
                     );
                     continue;
@@ -96,6 +109,11 @@ impl BlossomClient {
     /// Download a blob by SHA256 hash.
     ///
     /// Verifies content-addressed integrity after download.
+    #[instrument(name = "blossom.client.download", skip_all, fields(
+        blob.sha256 = %sha256,
+        blob.size,
+        server.url,
+    ))]
     pub async fn download(&self, sha256: &str) -> Result<Vec<u8>, String> {
         let auth_event = build_blossom_auth(self.signer.as_ref(), "get", None, None, "");
         let auth_header = auth_header_value(&auth_event);
@@ -123,23 +141,28 @@ impl BlossomClient {
                             sha256, actual_hash
                         ));
                     }
+                    tracing::Span::current().record("blob.size", data.len() as u64);
+                    tracing::Span::current().record("server.url", server.as_str());
+                    info!(
+                        blob.sha256 = %sha256,
+                        blob.size = data.len(),
+                        server.url = %server,
+                        "blob downloaded"
+                    );
                     return Ok(data);
                 }
                 Ok(resp) => {
-                    let status = resp.status();
                     warn!(
-                        component = "blossom.client",
-                        server = %server,
-                        status = %status,
+                        server.url = %server,
+                        http.status_code = resp.status().as_u16(),
                         "download failed, trying next server"
                     );
                     continue;
                 }
                 Err(e) => {
                     warn!(
-                        component = "blossom.client",
-                        server = %server,
-                        error = %e,
+                        server.url = %server,
+                        error.message = %e,
                         "download request error, trying next server"
                     );
                     continue;
@@ -151,6 +174,7 @@ impl BlossomClient {
     }
 
     /// Check if a blob exists on any configured server.
+    #[instrument(name = "blossom.client.exists", skip_all, fields(blob.sha256 = %sha256))]
     pub async fn exists(&self, sha256: &str) -> Result<bool, String> {
         for server in &self.servers {
             let url = format!("{}/{}", server.trim_end_matches('/'), sha256);
@@ -162,9 +186,8 @@ impl BlossomClient {
                 Ok(_) => continue,
                 Err(e) => {
                     warn!(
-                        component = "blossom.client",
-                        server = %server,
-                        error = %e,
+                        server.url = %server,
+                        error.message = %e,
                         "exists check error, trying next server"
                     );
                     continue;

@@ -1,11 +1,11 @@
 # blossom-server
 
-Example Blossom API server showcasing all [blossom-rs](https://github.com/MonumentalSystems/blossom-rs) library features.
+Blossom blob storage API server built on [blossom-rs](https://github.com/MonumentalSystems/blossom-rs).
 
 ## Quick Start
 
 ```bash
-# Default: filesystem storage + SQLite metadata in current directory
+# Default: filesystem storage + SQLite metadata
 cargo run -p blossom-server
 
 # In-memory (no persistence, good for testing)
@@ -28,7 +28,14 @@ Options:
       --db-path <PATH>           SQLite database path [default: ./blossom.db]
       --require-auth             Require BIP-340 auth for uploads
       --max-upload-size <BYTES>  Max upload size in bytes
+      --body-limit <BYTES>       Max HTTP body size [default: 268435456 (256 MB)]
+      --allowed-types <TYPES>    Comma-separated MIME types (empty = all)
       --whitelist <FILE>         Path to pubkey whitelist file
+      --whitelist-reload-secs <N> Whitelist hot-reload interval [default: 0 (disabled)]
+      --stats-flush-secs <N>    Stats flush interval [default: 60]
+      --keygen                   Generate a keypair and exit
+      --tls-cert <FILE>          TLS certificate (PEM)
+      --tls-key <FILE>           TLS private key (PEM)
       --log-level <LEVEL>        Log level [default: info]
 ```
 
@@ -44,20 +51,37 @@ Options:
 | `PUT` | `/mirror` | Mirror from remote URL (auth required) | BUD-04 |
 | `GET` | `/upload-requirements` | Server constraints | BUD-06 |
 | `GET` | `/status` | Server statistics | - |
+| `GET` | `/health` | Health check (200 OK) | - |
 | `GET` | `/.well-known/nostr/nip96.json` | NIP-96 server info | NIP-96 |
 | `POST` | `/n96` | NIP-96 upload (auth required) | NIP-96 |
 | `GET` | `/n96` | NIP-96 file list (auth required) | NIP-96 |
 | `DELETE` | `/n96/:sha256` | NIP-96 delete (auth required) | NIP-96 |
 
-## Logging
+## Features
 
-Structured JSON logs to stdout with OTEL-compatible field names. Control verbosity with `--log-level` or the `RUST_LOG` environment variable.
+### CORS
+Enabled by default — allows all origins, methods, and headers. Suitable for browser-based Nostr clients.
+
+### Graceful Shutdown
+On Ctrl+C, the server flushes accumulated access statistics to the database before exiting.
+
+### Stats Flush
+Access statistics (egress bytes, last accessed) accumulate in memory via lock-free DashMap counters and flush to the database periodically (default: every 60 seconds) and on shutdown.
+
+### Whitelist Hot-Reload
+When `--whitelist-reload-secs` is set, the whitelist file is re-read at that interval without restarting the server.
+
+### TLS
+Optional TLS via rustls. Provide `--tls-cert` and `--tls-key` PEM files.
 
 ```bash
-# Debug logging
-cargo run -p blossom-server -- --log-level debug
+cargo run -p blossom-server -- --tls-cert cert.pem --tls-key key.pem
+```
 
-# Filter by module
+### Logging
+Structured JSON logs to stdout with OTEL-compatible field names. Control verbosity with `--log-level` or `RUST_LOG`.
+
+```bash
 RUST_LOG=blossom_rs::server=debug cargo run -p blossom-server
 ```
 
@@ -72,5 +96,8 @@ d4e5f6...
 ```
 
 ```bash
-cargo run -p blossom-server -- --require-auth --whitelist allowed-keys.txt
+cargo run -p blossom-server -- \
+  --require-auth \
+  --whitelist allowed-keys.txt \
+  --whitelist-reload-secs 30
 ```

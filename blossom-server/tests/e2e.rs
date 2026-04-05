@@ -3,6 +3,9 @@
 //! Spins up an in-memory server and exercises all endpoints via HTTP
 //! and the BlossomClient library.
 
+use std::collections::HashSet;
+
+use blossom_rs::access::Whitelist;
 use blossom_rs::auth::{auth_header_value, build_blossom_auth};
 use blossom_rs::db::{MemoryDatabase, SqliteDatabase};
 use blossom_rs::protocol::BlobDescriptor;
@@ -319,4 +322,205 @@ async fn test_sqlite_server_lifecycle() {
     let status: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(status["blobs"], 0);
     assert_eq!(status["uploads"], 0);
+}
+
+#[tokio::test]
+async fn test_health_endpoint() {
+    let (url, _signer) = spawn_test_server().await;
+    let http = reqwest::Client::new();
+
+    let resp = http.get(format!("{}/health", url)).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_cors_headers() {
+    let server = BlobServer::new(MemoryBackend::new(), "http://localhost:3000");
+    let state = server.shared_state();
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
+    let app = server.router().merge(nip96_router(state)).layer(cors);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let http = reqwest::Client::new();
+
+    // Preflight OPTIONS.
+    let resp = http
+        .request(reqwest::Method::OPTIONS, format!("{}/status", url))
+        .header("Origin", "https://example.com")
+        .header("Access-Control-Request-Method", "GET")
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.headers().contains_key("access-control-allow-origin"));
+
+    // Regular request should have CORS header.
+    let resp = http
+        .get(format!("{}/status", url))
+        .header("Origin", "https://example.com")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "*"
+    );
+}
+
+#[tokio::test]
+async fn test_body_limit_configurable() {
+    let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+        .body_limit(50)
+        .build();
+    let state = server.shared_state();
+    let app = server.router().merge(nip96_router(state));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let http = reqwest::Client::new();
+
+    // 30 bytes should succeed.
+    let resp = http
+        .put(format!("{}/upload", url))
+        .body(vec![0u8; 30])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // 100 bytes should be rejected by body limit (before our handler even runs).
+    let resp = http
+        .put(format!("{}/upload", url))
+        .body(vec![0u8; 100])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_stats_flush_to_db() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let db_url = format!("sqlite:{}?mode=rwc", tmp.path().display());
+    let db = SqliteDatabase::new(&db_url).await.unwrap();
+
+    let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+        .database(db)
+        .build();
+    let state = server.shared_state();
+    let app = server.router().merge(nip96_router(state.clone()));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let http = reqwest::Client::new();
+
+    // Upload a blob.
+    let resp = http
+        .put(format!("{}/upload", url))
+        .body(b"stats test".to_vec())
+        .send()
+        .await
+        .unwrap();
+    let desc: BlobDescriptor = resp.json().await.unwrap();
+
+    // Download it to generate access stats.
+    http.get(format!("{}/{}", url, desc.sha256))
+        .send()
+        .await
+        .unwrap();
+
+    // Stats should be tracked but not flushed yet.
+    let resp = http.get(format!("{}/status", url)).send().await.unwrap();
+    let status: serde_json::Value = resp.json().await.unwrap();
+    assert!(status["tracked_stats"].as_u64().unwrap() >= 1);
+
+    // Manually flush stats.
+    {
+        let mut s = state.lock().await;
+        s.flush_stats();
+    }
+
+    // After flush, tracked stats should be 0.
+    let resp = http.get(format!("{}/status", url)).send().await.unwrap();
+    let status: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(status["tracked_stats"], 0);
+}
+
+#[tokio::test]
+async fn test_whitelist_access_control() {
+    let signer = Signer::generate();
+    let allowed_pubkey = signer.public_key_hex();
+
+    let mut keys = HashSet::new();
+    keys.insert(allowed_pubkey.clone());
+    let whitelist = Whitelist::new(keys);
+
+    let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+        .require_auth()
+        .access_control(whitelist)
+        .build();
+    let state = server.shared_state();
+    let app = server.router().merge(nip96_router(state));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let http = reqwest::Client::new();
+
+    // Allowed signer should succeed.
+    let data = b"whitelist allowed";
+    let auth_event = build_blossom_auth(
+        &signer,
+        "upload",
+        Some(&blossom_rs::protocol::sha256_hex(data)),
+        None,
+        "",
+    );
+    let auth_header = auth_header_value(&auth_event);
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", &auth_header)
+        .body(data.to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Unlisted signer should be rejected (403).
+    let other_signer = Signer::generate();
+    let data2 = b"whitelist blocked";
+    let auth_event2 = build_blossom_auth(
+        &other_signer,
+        "upload",
+        Some(&blossom_rs::protocol::sha256_hex(data2)),
+        None,
+        "",
+    );
+    let auth_header2 = auth_header_value(&auth_event2);
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", &auth_header2)
+        .body(data2.to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
 }

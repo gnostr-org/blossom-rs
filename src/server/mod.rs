@@ -60,6 +60,23 @@ pub struct ServerState {
     requirements: UploadRequirements,
 }
 
+impl ServerState {
+    /// Flush accumulated access statistics to the database.
+    ///
+    /// Call this periodically (e.g., every 60s) or on graceful shutdown
+    /// to persist egress/access counters.
+    pub fn flush_stats(&mut self) {
+        self.stats.flush(&mut *self.database);
+    }
+
+    /// Replace the access control policy at runtime.
+    ///
+    /// Useful for hot-reloading a whitelist file without restarting.
+    pub fn set_access_control(&mut self, ac: Box<dyn AccessControl>) {
+        self.access = ac;
+    }
+}
+
 /// Builder for configuring a BlobServer.
 pub struct BlobServerBuilder {
     backend: Box<dyn BlobBackend>,
@@ -67,6 +84,7 @@ pub struct BlobServerBuilder {
     database: Option<Box<dyn BlobDatabase>>,
     access: Option<Box<dyn AccessControl>>,
     requirements: UploadRequirements,
+    body_limit: usize,
 }
 
 impl BlobServerBuilder {
@@ -100,6 +118,12 @@ impl BlobServerBuilder {
         self
     }
 
+    /// Set the maximum HTTP body size in bytes (default: 256 MB).
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = bytes;
+        self
+    }
+
     /// Build the BlobServer.
     pub fn build(self) -> BlobServer {
         let state = Arc::new(Mutex::new(ServerState {
@@ -112,7 +136,10 @@ impl BlobServerBuilder {
             base_url: self.base_url,
             requirements: self.requirements,
         }));
-        BlobServer { state }
+        BlobServer {
+            state,
+            body_limit: self.body_limit,
+        }
     }
 }
 
@@ -138,6 +165,7 @@ impl BlobServerBuilder {
 /// ```
 pub struct BlobServer {
     state: SharedState,
+    body_limit: usize,
 }
 
 impl BlobServer {
@@ -161,6 +189,7 @@ impl BlobServer {
             database: None,
             access: None,
             requirements: UploadRequirements::default(),
+            body_limit: 256 * 1024 * 1024, // 256 MB default
         }
     }
 
@@ -190,8 +219,9 @@ impl BlobServer {
             .route("/mirror", put(handle_mirror))
             .route("/upload-requirements", get(handle_upload_requirements))
             .route("/status", get(handle_status))
+            .route("/health", get(handle_health))
             .with_state(self.state.clone())
-            .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
+            .layer(axum::extract::DefaultBodyLimit::max(self.body_limit))
             .layer(
                 tower_http::trace::TraceLayer::new_for_http()
                     .make_span_with(|request: &axum::http::Request<_>| {
@@ -600,6 +630,14 @@ async fn handle_status(State(state): State<SharedState>) -> impl IntoResponse {
         "users": s.database.user_count(),
         "tracked_stats": s.stats.tracked_count(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+async fn handle_health() -> StatusCode {
+    StatusCode::OK
 }
 
 // ---------------------------------------------------------------------------

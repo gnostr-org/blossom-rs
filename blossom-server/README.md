@@ -36,6 +36,12 @@ Options:
       --keygen                   Generate a keypair and exit
       --tls-cert <FILE>          TLS certificate (PEM)
       --tls-key <FILE>           TLS private key (PEM)
+      --rate-limit-max <N>       Max requests per bucket [default: 60]
+      --rate-limit-refill <F>    Token refill rate per second [default: 1.0]
+      --no-rate-limit            Disable rate limiting
+      --webhook-urls <URLS>      Webhook URLs (comma-separated)
+      --cors-origins <ORIGINS>   CORS allowed origins (comma-separated, default: all)
+      --enable-admin             Enable admin endpoints at /admin/*
       --log-level <LEVEL>        Log level [default: info]
 ```
 
@@ -56,6 +62,11 @@ Options:
 | `POST` | `/n96` | NIP-96 upload (auth required) | NIP-96 |
 | `GET` | `/n96` | NIP-96 file list (auth required) | NIP-96 |
 | `DELETE` | `/n96/:sha256` | NIP-96 delete (auth required) | NIP-96 |
+| `GET` | `/admin/stats` | Server statistics (admin auth) | Admin |
+| `GET` | `/admin/users/:pubkey` | Get user record (admin auth) | Admin |
+| `PUT` | `/admin/users/:pubkey/quota` | Set user quota (admin auth) | Admin |
+| `GET` | `/admin/blobs` | Blob count and size (admin auth) | Admin |
+| `DELETE` | `/admin/blobs/:sha256` | Admin delete blob (admin auth) | Admin |
 
 ## Features
 
@@ -112,13 +123,6 @@ cargo run -p blossom-server -- \
 | **VitLabeler** | Not implemented | `labels` feature has `NoopLabeler` + `BlockAllLabeler` only |
 | **LlmLabeler** | Not implemented | No OpenAI-compatible API labeler yet |
 | **BUD-05** (Media optimization) | Not implemented | `PUT /media` for server-side compression/conversion |
-| **NIP-98 auth** | Not implemented | Only kind:24242 Blossom auth, not kind:27235 NIP-98 HTTP auth |
-| **Admin endpoints** | Not implemented | No user/blob management or server admin API |
-| **Quota management API** | Not implemented | Quotas work via `set_quota()` in code but no HTTP endpoint |
-| **Configurable CORS origins** | Not implemented | Hardcoded `allow_origin(Any)` — no flag to restrict |
 | **File-watch whitelist reload** | Timer-based only | Polling interval, not `inotify`/`kqueue` |
-| **Perceptual hash dedup** | Stub only | `perceptual_hash()` exists but not integrated into upload flow |
 | **Blurhash in responses** | Not integrated | `blurhash()` method exists but not called during upload |
-| **Versioned DB migrations** | Not implemented | Uses inline `CREATE TABLE IF NOT EXISTS` |
-| **Rate limiting** | Not implemented | No per-IP or per-pubkey throttling |
-| **Webhook notifications** | Not implemented | No hooks for upload/delete events |
+| **Phash in upload flow** | Schema ready | `phash` column exists in DB, not yet computed on upload |

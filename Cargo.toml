@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Full-featured Blossom (BUD-01) blob storage library for Rust — embeddable server, async client, BIP-340 Nostr auth"
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/MonumentalSystems/blossom-rs"
 keywords = ["blossom", "nostr", "blob", "storage", "bip340"]
 categories = ["web-programming", "cryptography"]

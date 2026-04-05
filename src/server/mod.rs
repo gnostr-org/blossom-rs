@@ -1,11 +1,18 @@
-//! Embeddable Blossom server (BUD-01 compliant).
+//! Embeddable Blossom server (BUD-01/02/04/06 compliant).
 //!
 //! Provides an Axum router that implements the Blossom HTTP API:
-//! - `PUT /upload` — upload blob, returns BlobDescriptor
-//! - `GET /<sha256>` — retrieve blob by hash
-//! - `HEAD /<sha256>` — check existence
-//! - `DELETE /<sha256>` — remove blob (with auth verification)
+//! - `PUT /upload` — upload blob, returns BlobDescriptor (BUD-01)
+//! - `GET /<sha256>` — retrieve blob by hash (BUD-01)
+//! - `HEAD /<sha256>` — check existence (BUD-01)
+//! - `DELETE /<sha256>` — remove blob (BUD-01, auth required)
+//! - `GET /list/:pubkey` — list blobs by uploader pubkey (BUD-02)
+//! - `PUT /mirror` — mirror a blob from a remote URL (BUD-04)
+//! - `GET /upload-requirements` — server upload constraints (BUD-06)
 //! - `GET /status` — server statistics
+//!
+//! NIP-96 endpoints are available via the [`nip96`] submodule.
+
+pub mod nip96;
 
 use std::sync::Arc;
 
@@ -19,24 +26,115 @@ use axum::{
 };
 use tokio::sync::Mutex;
 
+use crate::access::{AccessControl, Action, OpenAccess};
 use crate::auth::{verify_blossom_auth, AuthError};
-use crate::protocol::{base64url_decode, NostrEvent};
+use crate::db::{BlobDatabase, DbError, MemoryDatabase, UploadRecord};
+use crate::protocol::{base64url_decode, BlobDescriptor, NostrEvent};
+use crate::stats::StatsAccumulator;
 use crate::storage::BlobBackend;
 
 /// Shared server state wrapping a blob backend.
 pub type SharedState = Arc<Mutex<ServerState>>;
 
+/// Upload requirements configuration (BUD-06).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct UploadRequirements {
+    /// Maximum upload size in bytes. `None` means no limit (beyond body limit).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<u64>,
+    /// Allowed MIME types. Empty means all types allowed.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub allowed_types: Vec<String>,
+    /// Whether authentication is required for uploads.
+    pub require_auth: bool,
+}
+
 /// Internal server state.
 pub struct ServerState {
     backend: Box<dyn BlobBackend>,
+    database: Box<dyn BlobDatabase>,
+    access: Box<dyn AccessControl>,
+    stats: StatsAccumulator,
     base_url: String,
-    /// If true, uploads require valid kind:24242 auth. Default: false (open).
-    require_auth: bool,
+    requirements: UploadRequirements,
+}
+
+/// Builder for configuring a BlobServer.
+pub struct BlobServerBuilder {
+    backend: Box<dyn BlobBackend>,
+    base_url: String,
+    database: Option<Box<dyn BlobDatabase>>,
+    access: Option<Box<dyn AccessControl>>,
+    requirements: UploadRequirements,
+}
+
+impl BlobServerBuilder {
+    /// Set a database backend for metadata persistence.
+    pub fn database(mut self, db: impl BlobDatabase + 'static) -> Self {
+        self.database = Some(Box::new(db));
+        self
+    }
+
+    /// Set an access control policy.
+    pub fn access_control(mut self, ac: impl AccessControl + 'static) -> Self {
+        self.access = Some(Box::new(ac));
+        self
+    }
+
+    /// Require auth for uploads.
+    pub fn require_auth(mut self) -> Self {
+        self.requirements.require_auth = true;
+        self
+    }
+
+    /// Set maximum upload size in bytes.
+    pub fn max_upload_size(mut self, bytes: u64) -> Self {
+        self.requirements.max_size = Some(bytes);
+        self
+    }
+
+    /// Set allowed MIME types for upload.
+    pub fn allowed_types(mut self, types: Vec<String>) -> Self {
+        self.requirements.allowed_types = types;
+        self
+    }
+
+    /// Build the BlobServer.
+    pub fn build(self) -> BlobServer {
+        let state = Arc::new(Mutex::new(ServerState {
+            backend: self.backend,
+            database: self
+                .database
+                .unwrap_or_else(|| Box::new(MemoryDatabase::new())),
+            access: self.access.unwrap_or_else(|| Box::new(OpenAccess)),
+            stats: StatsAccumulator::new(),
+            base_url: self.base_url,
+            requirements: self.requirements,
+        }));
+        BlobServer { state }
+    }
 }
 
 /// Embeddable Blossom server.
 ///
 /// Create one and call `.router()` to get an Axum router you can mount.
+///
+/// # Examples
+///
+/// Simple open server:
+/// ```rust,ignore
+/// let server = BlobServer::new(MemoryBackend::new(), "http://localhost:3000");
+/// ```
+///
+/// Configured server with auth, quotas, and access control:
+/// ```rust,ignore
+/// let server = BlobServer::builder(backend, "http://localhost:3000")
+///     .database(my_db)
+///     .access_control(my_whitelist)
+///     .require_auth()
+///     .max_upload_size(50 * 1024 * 1024)
+///     .build();
+/// ```
 pub struct BlobServer {
     state: SharedState,
 }
@@ -46,22 +144,23 @@ impl BlobServer {
     ///
     /// `base_url` is used to construct blob URLs in descriptors (e.g., `http://localhost:3000`).
     pub fn new(backend: impl BlobBackend + 'static, base_url: &str) -> Self {
-        let state = Arc::new(Mutex::new(ServerState {
-            backend: Box::new(backend),
-            base_url: base_url.to_string(),
-            require_auth: false,
-        }));
-        Self { state }
+        Self::builder(backend, base_url).build()
     }
 
     /// Create a new server with auth verification enabled on uploads.
     pub fn new_with_auth(backend: impl BlobBackend + 'static, base_url: &str) -> Self {
-        let state = Arc::new(Mutex::new(ServerState {
+        Self::builder(backend, base_url).require_auth().build()
+    }
+
+    /// Create a builder for advanced configuration.
+    pub fn builder(backend: impl BlobBackend + 'static, base_url: &str) -> BlobServerBuilder {
+        BlobServerBuilder {
             backend: Box::new(backend),
             base_url: base_url.to_string(),
-            require_auth: true,
-        }));
-        Self { state }
+            database: None,
+            access: None,
+            requirements: UploadRequirements::default(),
+        }
     }
 
     /// Get a clone of the shared state (for custom extensions).
@@ -79,6 +178,9 @@ impl BlobServer {
                     .head(handle_head_blob)
                     .delete(handle_delete_blob),
             )
+            .route("/list/:pubkey", get(handle_list))
+            .route("/mirror", put(handle_mirror))
+            .route("/upload-requirements", get(handle_upload_requirements))
             .route("/status", get(handle_status))
             .with_state(self.state.clone())
             .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
@@ -104,6 +206,14 @@ fn extract_auth_event(headers: &HeaderMap) -> Result<NostrEvent, AuthError> {
     Ok(event)
 }
 
+fn error_json(msg: &str) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"error": msg}))
+}
+
+// ---------------------------------------------------------------------------
+// BUD-01: Upload
+// ---------------------------------------------------------------------------
+
 async fn handle_upload(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -111,35 +221,77 @@ async fn handle_upload(
 ) -> impl IntoResponse {
     let data = body.to_vec();
     if data.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "empty body"})),
-        );
+        return (StatusCode::BAD_REQUEST, error_json("empty body"));
     }
 
     let mut s = state.lock().await;
 
-    if s.require_auth {
-        match extract_auth_event(&headers) {
-            Ok(event) => {
-                if let Err(e) = verify_blossom_auth(&event, Some("upload")) {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({"error": e.to_string()})),
-                    );
-                }
-            }
-            Err(e) => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                );
-            }
+    // BUD-06: Check upload requirements.
+    if let Some(max) = s.requirements.max_size {
+        if data.len() as u64 > max {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                error_json(&format!("exceeds max upload size of {} bytes", max)),
+            );
         }
     }
 
+    // Auth check.
+    let pubkey = if s.requirements.require_auth {
+        match extract_auth_event(&headers) {
+            Ok(event) => {
+                if let Err(e) = verify_blossom_auth(&event, Some("upload")) {
+                    return (StatusCode::UNAUTHORIZED, error_json(&e.to_string()));
+                }
+                // Access control check.
+                if !s.access.is_allowed(&event.pubkey, Action::Upload) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        error_json("upload not allowed for this pubkey"),
+                    );
+                }
+                // Quota check.
+                if let Err(DbError::QuotaExceeded {
+                    used,
+                    requested,
+                    limit,
+                }) = s.database.check_quota(&event.pubkey, data.len() as u64)
+                {
+                    return (
+                        StatusCode::INSUFFICIENT_STORAGE,
+                        error_json(&format!(
+                            "quota exceeded: used {} + requested {} > limit {}",
+                            used, requested, limit
+                        )),
+                    );
+                }
+                Some(event.pubkey.clone())
+            }
+            Err(e) => {
+                return (StatusCode::UNAUTHORIZED, error_json(&e.to_string()));
+            }
+        }
+    } else {
+        // Try to extract pubkey if auth header is present (optional).
+        extract_auth_event(&headers).ok().map(|e| e.pubkey)
+    };
+
     let base_url = s.base_url.clone();
     let descriptor = s.backend.insert(data, &base_url);
+
+    // Record in database.
+    let upload_pubkey = pubkey.unwrap_or_else(|| "anonymous".to_string());
+    let record = UploadRecord {
+        sha256: descriptor.sha256.clone(),
+        size: descriptor.size,
+        mime_type: descriptor
+            .content_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
+        pubkey: upload_pubkey,
+        created_at: descriptor.uploaded.unwrap_or(0),
+    };
+    let _ = s.database.record_upload(&record);
 
     (
         StatusCode::OK,
@@ -147,18 +299,27 @@ async fn handle_upload(
     )
 }
 
+// ---------------------------------------------------------------------------
+// BUD-01: Get / Head / Delete
+// ---------------------------------------------------------------------------
+
 async fn handle_get_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
 ) -> impl IntoResponse {
     let s = state.lock().await;
     match s.backend.get(&sha256) {
-        Some(data) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-            data,
-        )
-            .into_response(),
+        Some(data) => {
+            let size = data.len() as u64;
+            // Record access stats.
+            s.stats.record_access(&sha256, size);
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                data,
+            )
+                .into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -184,33 +345,208 @@ async fn handle_delete_blob(
     match extract_auth_event(&headers) {
         Ok(event) => {
             if let Err(e) = verify_blossom_auth(&event, Some("delete")) {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                );
+                return (StatusCode::UNAUTHORIZED, error_json(&e.to_string()));
             }
             let mut s = state.lock().await;
+            if !s.access.is_allowed(&event.pubkey, Action::Delete) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    error_json("delete not allowed for this pubkey"),
+                );
+            }
             if s.backend.delete(&sha256) {
+                let _ = s.database.delete_upload(&sha256);
                 (StatusCode::OK, Json(serde_json::json!({"deleted": true})))
             } else {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "not found"})),
-                )
+                (StatusCode::NOT_FOUND, error_json("not found"))
             }
         }
         Err(_) => (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "authorization required for delete"})),
+            error_json("authorization required for delete"),
         ),
     }
 }
+
+// ---------------------------------------------------------------------------
+// BUD-02: List by pubkey
+// ---------------------------------------------------------------------------
+
+async fn handle_list(
+    State(state): State<SharedState>,
+    Path(pubkey): Path<String>,
+) -> impl IntoResponse {
+    let s = state.lock().await;
+    match s.database.list_uploads_by_pubkey(&pubkey) {
+        Ok(records) => {
+            let descriptors: Vec<BlobDescriptor> = records
+                .into_iter()
+                .map(|r| BlobDescriptor {
+                    sha256: r.sha256.clone(),
+                    size: r.size,
+                    content_type: Some(r.mime_type),
+                    url: Some(format!("{}/{}", s.base_url, r.sha256)),
+                    uploaded: Some(r.created_at),
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(descriptors).unwrap()),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_json(&e.to_string()),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BUD-04: Mirror
+// ---------------------------------------------------------------------------
+
+/// Request body for the mirror endpoint.
+#[derive(serde::Deserialize)]
+struct MirrorRequest {
+    url: String,
+}
+
+async fn handle_mirror(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(req): Json<MirrorRequest>,
+) -> impl IntoResponse {
+    // Mirror requires auth.
+    let pubkey = match extract_auth_event(&headers) {
+        Ok(event) => {
+            if let Err(e) = verify_blossom_auth(&event, Some("upload")) {
+                return (StatusCode::UNAUTHORIZED, error_json(&e.to_string()));
+            }
+            event.pubkey
+        }
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, error_json(&e.to_string()));
+        }
+    };
+
+    // Fetch the remote blob.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let resp = match client.get(&req.url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                error_json(&format!("remote returned status {}", r.status())),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                error_json(&format!("failed to fetch remote: {e}")),
+            );
+        }
+    };
+
+    let data = match resp.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                error_json(&format!("failed to read remote body: {e}")),
+            );
+        }
+    };
+
+    if data.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            error_json("remote returned empty body"),
+        );
+    }
+
+    let mut s = state.lock().await;
+
+    // Check size limit.
+    if let Some(max) = s.requirements.max_size {
+        if data.len() as u64 > max {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                error_json(&format!("mirrored blob exceeds max size of {} bytes", max)),
+            );
+        }
+    }
+
+    // Access control.
+    if !s.access.is_allowed(&pubkey, Action::Mirror) {
+        return (
+            StatusCode::FORBIDDEN,
+            error_json("mirror not allowed for this pubkey"),
+        );
+    }
+
+    // Quota check.
+    if let Err(DbError::QuotaExceeded {
+        used,
+        requested,
+        limit,
+    }) = s.database.check_quota(&pubkey, data.len() as u64)
+    {
+        return (
+            StatusCode::INSUFFICIENT_STORAGE,
+            error_json(&format!(
+                "quota exceeded: used {} + requested {} > limit {}",
+                used, requested, limit
+            )),
+        );
+    }
+
+    let base_url = s.base_url.clone();
+    let descriptor = s.backend.insert(data, &base_url);
+
+    // Record in database.
+    let record = UploadRecord {
+        sha256: descriptor.sha256.clone(),
+        size: descriptor.size,
+        mime_type: descriptor
+            .content_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
+        pubkey,
+        created_at: descriptor.uploaded.unwrap_or(0),
+    };
+    let _ = s.database.record_upload(&record);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(descriptor).unwrap()),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// BUD-06: Upload requirements
+// ---------------------------------------------------------------------------
+
+async fn handle_upload_requirements(State(state): State<SharedState>) -> impl IntoResponse {
+    let s = state.lock().await;
+    Json(serde_json::to_value(&s.requirements).unwrap())
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
 
 async fn handle_status(State(state): State<SharedState>) -> impl IntoResponse {
     let s = state.lock().await;
     Json(serde_json::json!({
         "blobs": s.backend.len(),
         "total_bytes": s.backend.total_bytes(),
+        "uploads": s.database.upload_count(),
+        "users": s.database.user_count(),
+        "tracked_stats": s.stats.tracked_count(),
     }))
 }
 
@@ -238,7 +574,7 @@ async fn s3_put(
     let data = body.to_vec();
     let hash_key = key.trim_end_matches(".blob").to_string();
     let size = data.len() as u64;
-    let _ = (hash_key, size); // S3 compat stores by content hash like normal
+    let _ = (hash_key, size);
     let mut s = state.lock().await;
     let base_url = s.base_url.clone();
     let _ = s.backend.insert(data, &base_url);
@@ -305,17 +641,19 @@ mod tests {
         BlobServer::new(MemoryBackend::new(), "http://localhost:3000")
     }
 
-    #[tokio::test]
-    async fn test_upload_and_get() {
-        let server = test_server();
+    async fn spawn_server(server: BlobServer) -> String {
         let app = server.router();
-
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let url = format!("http://{}", addr);
         tokio::spawn(async move { axum::serve(listener, app).await.ok() });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        url
+    }
 
+    #[tokio::test]
+    async fn test_upload_and_get() {
+        let url = spawn_server(test_server()).await;
         let http = reqwest::Client::new();
 
         let data = b"hello blossom world!";
@@ -344,15 +682,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_head_nonexistent() {
-        let server = test_server();
-        let app = server.router();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let url = format!("http://{}", addr);
-        tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
+        let url = spawn_server(test_server()).await;
         let http = reqwest::Client::new();
         let resp = http
             .head(format!(
@@ -367,15 +697,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sha256_integrity() {
-        let server = test_server();
-        let app = server.router();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let url = format!("http://{}", addr);
-        tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
+        let url = spawn_server(test_server()).await;
         let http = reqwest::Client::new();
 
         let data: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
@@ -404,23 +726,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_status_endpoint() {
-        let server = test_server();
-        let app = server.router();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let url = format!("http://{}", addr);
-        tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
+        let url = spawn_server(test_server()).await;
         let http = reqwest::Client::new();
 
-        // Empty initially.
         let resp = http.get(format!("{}/status", url)).send().await.unwrap();
         let status: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(status["blobs"], 0);
 
-        // Upload something.
         http.put(format!("{}/upload", url))
             .body(b"test".to_vec())
             .send()
@@ -431,5 +743,124 @@ mod tests {
         let status: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(status["blobs"], 1);
         assert_eq!(status["total_bytes"], 4);
+        assert_eq!(status["uploads"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_by_pubkey() {
+        let url = spawn_server(test_server()).await;
+        let http = reqwest::Client::new();
+
+        // Upload some data (anonymous, so pubkey will be "anonymous").
+        http.put(format!("{}/upload", url))
+            .body(b"blob1".to_vec())
+            .send()
+            .await
+            .unwrap();
+
+        let resp = http
+            .get(format!("{}/list/anonymous", url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let list: Vec<BlobDescriptor> = resp.json().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].size, 5);
+    }
+
+    #[tokio::test]
+    async fn test_upload_requirements() {
+        let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+            .require_auth()
+            .max_upload_size(1024 * 1024)
+            .allowed_types(vec!["image/png".into(), "image/jpeg".into()])
+            .build();
+
+        let url = spawn_server(server).await;
+        let http = reqwest::Client::new();
+
+        let resp = http
+            .get(format!("{}/upload-requirements", url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let reqs: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(reqs["max_size"], 1024 * 1024);
+        assert_eq!(reqs["require_auth"], true);
+        assert_eq!(reqs["allowed_types"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_max_upload_size_enforced() {
+        let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+            .max_upload_size(10)
+            .build();
+
+        let url = spawn_server(server).await;
+        let http = reqwest::Client::new();
+
+        // Should succeed — 5 bytes < 10.
+        let resp = http
+            .put(format!("{}/upload", url))
+            .body(b"small".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Should fail — 20 bytes > 10.
+        let resp = http
+            .put(format!("{}/upload", url))
+            .body(b"this is way too large".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 413);
+    }
+
+    #[tokio::test]
+    async fn test_builder_pattern() {
+        let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+            .database(MemoryDatabase::new())
+            .require_auth()
+            .max_upload_size(50 * 1024 * 1024)
+            .build();
+
+        // Just verify it builds and the router works.
+        let _router = server.router();
+    }
+
+    #[tokio::test]
+    async fn test_empty_list() {
+        let url = spawn_server(test_server()).await;
+        let http = reqwest::Client::new();
+
+        let resp = http
+            .get(format!("{}/list/{}", url, "a".repeat(64)))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let list: Vec<BlobDescriptor> = resp.json().await.unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_status_tracks_users() {
+        let url = spawn_server(test_server()).await;
+        let http = reqwest::Client::new();
+
+        // Upload creates an "anonymous" user.
+        http.put(format!("{}/upload", url))
+            .body(b"data".to_vec())
+            .send()
+            .await
+            .unwrap();
+
+        let resp = http.get(format!("{}/status", url)).send().await.unwrap();
+        let status: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(status["users"], 1);
     }
 }

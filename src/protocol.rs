@@ -62,7 +62,7 @@ pub fn compute_event_id(
 pub fn base64url_encode(data: &[u8]) -> String {
     const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -107,11 +107,12 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
         })
         .collect();
 
-    for chunk in chars.chunks(4) {
+    let padded_bytes = padded.as_bytes();
+    for (i, chunk) in chars.chunks(4).enumerate() {
         if chunk.len() < 4 {
             break;
         }
-        if chunk.iter().any(|&c| c == 255) {
+        if chunk.contains(&255) {
             return Err("invalid base64 character".into());
         }
         let triple = ((chunk[0] as u32) << 18)
@@ -119,18 +120,10 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
             | ((chunk[2] as u32) << 6)
             | (chunk[3] as u32);
         out.push((triple >> 16) as u8);
-        if padded
-            .as_bytes()
-            .get(chunk.as_ptr() as usize - padded.as_ptr() as usize + 2)
-            != Some(&b'=')
-        {
+        if padded_bytes.get(i * 4 + 2) != Some(&b'=') {
             out.push((triple >> 8) as u8);
         }
-        if padded
-            .as_bytes()
-            .get(chunk.as_ptr() as usize - padded.as_ptr() as usize + 3)
-            != Some(&b'=')
-        {
+        if padded_bytes.get(i * 4 + 3) != Some(&b'=') {
             out.push(triple as u8);
         }
     }

@@ -11,6 +11,9 @@
 //! - **Async client**: upload/download with multi-server failover and SHA256 integrity
 //! - **BIP-340 auth**: kind:24242 Nostr events for upload/download/delete authorization
 //! - **Pluggable storage**: memory (testing), filesystem, S3-compatible backends
+//! - **Database layer**: metadata persistence with SQLite/Postgres support
+//! - **Access control**: pluggable authorization (whitelist, custom policies)
+//! - **File statistics**: egress tracking with DashMap accumulator
 //! - **Trait-based**: implement `BlossomSigner` for your own identity type
 //!
 //! ## Quick Start
@@ -34,8 +37,13 @@
 //! # }
 //! ```
 
+pub mod access;
 pub mod auth;
+pub mod db;
+pub mod labels;
+pub mod media;
 pub mod protocol;
+pub mod stats;
 pub mod storage;
 
 #[cfg(feature = "server")]
@@ -45,15 +53,28 @@ pub mod server;
 pub mod client;
 
 // Re-exports for convenience.
+pub use access::AccessControl;
 pub use auth::{BlossomSigner, Signer};
+pub use db::{BlobDatabase, MemoryDatabase};
+pub use labels::{MediaLabeler, NoopLabeler};
+pub use media::{MediaProcessor, PassthroughProcessor};
 pub use protocol::{BlobDescriptor, NostrEvent};
 pub use storage::{BlobBackend, MemoryBackend};
 
 #[cfg(feature = "filesystem")]
 pub use storage::FilesystemBackend;
 
+#[cfg(feature = "s3")]
+pub use storage::{S3Backend, S3Config};
+
 #[cfg(feature = "server")]
 pub use server::BlobServer;
 
 #[cfg(feature = "client")]
 pub use client::BlossomClient;
+
+#[cfg(feature = "db-sqlite")]
+pub use db::SqliteDatabase;
+
+#[cfg(feature = "db-postgres")]
+pub use db::PostgresDatabase;

@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "blossom-server", "blossom-cli"]
+
 [package]
 name = "blossom-rs"
 version = "0.1.0"

@@ -72,7 +72,7 @@ impl PostgresDatabase {
     }
 
     fn block_on<F: std::future::Future<Output = T>, T>(future: F) -> T {
-        tokio::runtime::Handle::current().block_on(future)
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
     }
 }
 

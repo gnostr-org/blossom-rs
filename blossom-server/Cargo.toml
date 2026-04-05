@@ -19,6 +19,6 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 serde_json = "1.0"
 
 [dev-dependencies]
-blossom-rs = { path = "..", version = "0.1.0", features = ["server", "client", "filesystem"] }
+blossom-rs = { path = "..", version = "0.1.0", features = ["server", "client", "filesystem", "db-sqlite"] }
 reqwest = { version = "0.12", features = ["json"] }
 tempfile = "3"

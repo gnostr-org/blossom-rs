@@ -4,7 +4,7 @@
 //! and the BlossomClient library.
 
 use blossom_rs::auth::{auth_header_value, build_blossom_auth};
-use blossom_rs::db::MemoryDatabase;
+use blossom_rs::db::{MemoryDatabase, SqliteDatabase};
 use blossom_rs::protocol::BlobDescriptor;
 use blossom_rs::server::nip96::nip96_router;
 use blossom_rs::{BlobServer, BlossomClient, BlossomSigner, MemoryBackend, Signer};
@@ -248,4 +248,75 @@ async fn test_multiple_uploads_and_dedup() {
     let resp = http.get(format!("{}/status", url)).send().await.unwrap();
     let status: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(status["blobs"], 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_sqlite_server_lifecycle() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let db_url = format!("sqlite:{}?mode=rwc", tmp.path().display());
+    let db = SqliteDatabase::new(&db_url).await.unwrap();
+
+    let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+        .database(db)
+        .build();
+    let state = server.shared_state();
+    let app = server.router().merge(nip96_router(state));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let signer = Signer::generate();
+    let client = BlossomClient::new(
+        vec![url.clone()],
+        Signer::from_secret_hex(&signer.secret_key_hex()).unwrap(),
+    );
+    let http = reqwest::Client::new();
+
+    // Upload.
+    let data = b"sqlite e2e test blob";
+    let desc = client.upload(data, "text/plain").await.unwrap();
+    assert_eq!(desc.size, data.len() as u64);
+
+    // Status should reflect 1 upload and 1 user (tracked in SQLite).
+    let resp = http.get(format!("{}/status", url)).send().await.unwrap();
+    let status: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(status["blobs"], 1);
+    assert_eq!(status["uploads"], 1);
+    assert_eq!(status["users"], 1);
+
+    // List by pubkey (stored in SQLite).
+    let pubkey = signer.public_key_hex();
+    let resp = http
+        .get(format!("{}/list/{}", url, pubkey))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let list: Vec<BlobDescriptor> = resp.json().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].sha256, desc.sha256);
+
+    // Download and verify.
+    let downloaded = client.download(&desc.sha256).await.unwrap();
+    assert_eq!(downloaded, data);
+
+    // Delete.
+    let auth_event = build_blossom_auth(&signer, "delete", None, None, "");
+    let auth_header = auth_header_value(&auth_event);
+    let resp = http
+        .delete(format!("{}/{}", url, desc.sha256))
+        .header("Authorization", &auth_header)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Status after delete — upload record removed from SQLite.
+    let resp = http.get(format!("{}/status", url)).send().await.unwrap();
+    let status: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(status["blobs"], 0);
+    assert_eq!(status["uploads"], 0);
 }

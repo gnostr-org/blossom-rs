@@ -21,7 +21,7 @@ blossom-cli/         — CLI client binary (upload/download/keygen/etc.)
 ```bash
 cargo build --workspace              # Build all crates
 cargo build --all-features           # Build everything including s3, otel, media, etc.
-cargo test --workspace               # Run all tests (101 tests)
+cargo test --workspace               # Run all tests (117 tests)
 cargo clippy --workspace -- -D warnings  # Lint all crates
 cargo fmt --all --check              # Format check all crates
 cargo fmt --all                      # Auto-format all crates
@@ -77,7 +77,7 @@ src/
 │   ├── sqlite.rs       — SqliteDatabase (SQLx)
 │   └── postgres.rs     — PostgresDatabase (SQLx)
 ├── server/
-│   ├── mod.rs          — BlobServer, BlobServerBuilder, HTTP handlers, TraceLayer
+│   ├── mod.rs          — BlobServer, BlobServerBuilder, ServerState, HTTP handlers, TraceLayer, /health
 │   └── nip96.rs        — NIP-96 endpoints (info, upload, list, delete)
 ├── client/
 │   └── mod.rs          — BlossomClient with failover + SHA256 integrity
@@ -128,8 +128,8 @@ feature for OTLP export to Jaeger, Grafana Tempo, Seq, etc.
 
 ## Testing Conventions
 
-- 96 tests: 73 unit + 18 integration + 5 property (proptest)
-- 92% line coverage across all modules
+- 117 tests: 73 lib unit + 18 lib integration + 5 property + 10 SQLite + 11 server e2e
+- 94% library line coverage (with db-sqlite feature)
 - Unit tests in `#[cfg(test)] mod tests` at bottom of each module
 - Async integration tests use `#[tokio::test]` with ephemeral TCP listeners
 - Server tests spawn a real Axum server on `127.0.0.1:0` (random port)

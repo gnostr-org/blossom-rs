@@ -8,6 +8,14 @@ Content-addressed blob storage over HTTP with BIP-340 Schnorr authorization via 
 [![crates.io](https://img.shields.io/crates/v/blossom-rs.svg)](https://crates.io/crates/blossom-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+## Workspace
+
+| Crate | Description |
+|-------|-------------|
+| **blossom-rs** | Core library — embeddable server, async client, all traits |
+| **blossom-server** | API server binary — filesystem + SQLite, CORS, TLS, graceful shutdown |
+| **blossom-cli** | CLI client — upload/download/mirror/keygen, hex + nsec1 key support |
+
 ## Features
 
 - **Embeddable server** — mount a Blossom-compliant Axum router into your app
@@ -16,10 +24,14 @@ Content-addressed blob storage over HTTP with BIP-340 Schnorr authorization via 
 - **Pluggable storage** — memory (testing), filesystem, S3-compatible backends
 - **Database layer** — metadata persistence with SQLite/Postgres via SQLx
 - **Access control** — whitelist with hot-reload, custom policies via trait
-- **File statistics** — lock-free egress tracking with DashMap accumulator
+- **File statistics** — lock-free egress tracking with DashMap accumulator, periodic DB flush
 - **Observability** — OTEL-compatible structured tracing with opt-in OTLP export
 - **NIP-96** — Nostr file storage protocol endpoints
 - **BUD-01/02/04/06** — core Blossom protocol + list, mirror, upload requirements
+- **Health check** — `GET /health` for load balancer probes
+- **CORS** — configurable cross-origin support for browser clients
+- **TLS** — optional rustls-based HTTPS via `axum-server`
+- **Graceful shutdown** — flushes stats to DB on Ctrl+C
 - **Media processing** — WebP conversion, thumbnails, blurhash, EXIF validation (feature-gated)
 - **Content labeling** — pluggable classification traits for moderation (feature-gated)
 - **Trait-based** — implement `BlossomSigner`, `BlobBackend`, `BlobDatabase`, `AccessControl`, `MediaProcessor`, or `MediaLabeler` for your own types
@@ -57,15 +69,19 @@ let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
     .access_control(Whitelist::new(HashSet::from(["pubkey_hex...".into()])))
     .require_auth()
     .max_upload_size(10 * 1024 * 1024) // 10 MB
+    .body_limit(50 * 1024 * 1024)      // 50 MB HTTP body limit
     .build();
 ```
 
 ### Client
 
+Keys are accepted as hex (64 chars) or nsec1 bech32 format.
+
 ```rust
 use blossom_rs::{BlossomClient, Signer};
 
 let signer = Signer::generate();
+// Or from existing key: Signer::from_secret_hex("deadbeef...")
 let client = BlossomClient::new(
     vec!["https://blossom.example.com".into()],
     signer,
@@ -83,7 +99,7 @@ let data = client.download(&desc.sha256).await?;
 | `client` | yes | reqwest BlossomClient with multi-server failover |
 | `filesystem` | yes | FilesystemBackend (persistent, restart-safe) |
 | `s3` | no | S3/R2/MinIO backend via `aws-sdk-s3` |
-| `s3-compat` | no | S3-protocol test router |
+| `s3-compat` | no | S3-protocol compatibility test router |
 | `db-sqlite` | no | SQLite metadata backend via SQLx |
 | `db-postgres` | no | PostgreSQL metadata backend via SQLx |
 | `media` | no | Image processing (WebP, thumbnails, blurhash, EXIF) |
@@ -100,6 +116,9 @@ let data = client.download(&desc.sha256).await?;
 | **BUD-06** | Implemented | `GET /upload-requirements` |
 | **NIP-96** | Implemented | `GET /.well-known/nostr/nip96.json`, `POST/GET/DELETE /n96` |
 | **BIP-340** | Implemented | Schnorr signature auth on all write operations |
+| **S3-compat** | Implemented | `PUT/GET/HEAD/DELETE /:bucket/*key` (feature-gated) |
+| **Health** | Implemented | `GET /health` |
+| **Status** | Implemented | `GET /status` |
 
 ## Architecture
 
@@ -114,7 +133,20 @@ MediaProcessor — image/video processing (Passthrough, ImageProcessor)
 MediaLabeler   — content classification (Noop, BlockAll, custom)
 ```
 
-Storage backends use synchronous interfaces wrapped in `Arc<Mutex<>>` by the async server.
+Storage backends use synchronous interfaces wrapped in `Arc<Mutex<>>` by the async server. Database backends use `tokio::task::block_in_place` for safe async-to-sync bridging.
+
+### Server Builder
+
+```rust
+BlobServer::builder(backend, "http://localhost:3000")
+    .database(db)               // BlobDatabase impl
+    .access_control(whitelist)  // AccessControl impl
+    .require_auth()             // Enforce BIP-340 auth on uploads
+    .max_upload_size(10_000_000) // BUD-06 size limit
+    .allowed_types(vec!["image/png".into()]) // BUD-06 type filter
+    .body_limit(50_000_000)     // HTTP body size limit
+    .build();
+```
 
 ## Observability
 
@@ -145,33 +177,35 @@ let _guard = blossom_rs::otel::init_tracing("my-server", "info")?;
 ## Testing
 
 ```bash
-cargo test                # 96 tests (unit + integration + property)
-cargo test --all-features # With all feature gates
-cargo llvm-cov            # Coverage report
+cargo test --workspace             # 117 tests (unit + integration + property + e2e)
+cargo test --workspace --features db-sqlite  # Include SQLite backend tests
+cargo llvm-cov --features db-sqlite          # Coverage report
 ```
 
-### Code Coverage — 95.3% line coverage
+### Code Coverage — 94.3% library line coverage
 
 | Module | Lines | Coverage |
 |--------|-------|----------|
 | `server/nip96.rs` | 280 | **99.3%** |
-| `server/mod.rs` | 550 | **98.4%** |
-| `protocol.rs` | 115 | **95.7%** |
 | `db/memory.rs` | 205 | **96.6%** |
 | `labels/mod.rs` | 81 | **96.3%** |
+| `server/mod.rs` | 569 | **96.0%** |
+| `protocol.rs` | 115 | **95.7%** |
 | `stats.rs` | 119 | **95.8%** |
 | `storage/memory.rs` | 53 | **94.3%** |
 | `auth/mod.rs` | 124 | **93.6%** |
-| `access/mod.rs` | 116 | **90.5%** |
+| `db/sqlite.rs` | 317 | **92.7%** |
 | `storage/filesystem.rs` | 86 | **90.7%** |
 | `auth/signer.rs` | 71 | **90.1%** |
 | `client/mod.rs` | 28 | **89.3%** |
-| **Total** | **1913** | **95.3%** |
+| `access/mod.rs` | 119 | **88.2%** |
+| **Total** | **2252** | **94.3%** |
 
 ## CI/CD
 
-- **CI**: Runs on push/PR to master — `cargo fmt --check`, `cargo build`, `cargo test`, `cargo clippy`
-- **Publish**: Triggers on `v*` tags — tests then publishes to crates.io
+- **CI**: On push/PR to master — `cargo fmt --all --check`, `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`
+- **Publish**: On `v*` tags — test, then publish `blossom-rs` → `blossom-server` + `blossom-cli` to crates.io
+- Self-hosted runner for trusted pushes; GitHub-hosted for fork PRs
 
 ## Acknowledgments
 

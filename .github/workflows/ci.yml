@@ -10,7 +10,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
+  # Trusted CI — runs on self-hosted runner for pushes to master.
+  # Only maintainers can push to master, so this is safe.
+  ci-trusted:
+    if: github.event_name == 'push'
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -18,6 +21,21 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo clean
+      - run: cargo fmt --check
+      - run: cargo build --all-targets
+      - run: cargo test
+      - run: cargo clippy -- -D warnings
+
+  # PR CI — runs on GitHub-hosted runner for pull requests.
+  # Safe for public repos: forks cannot access secrets or self-hosted infra.
+  ci-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo build --all-targets
       - run: cargo test

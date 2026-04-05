@@ -122,6 +122,12 @@ impl AccessControl for Whitelist {
     }
 }
 
+impl AccessControl for Arc<Whitelist> {
+    fn is_allowed(&self, pubkey: &str, action: Action) -> bool {
+        (**self).is_allowed(pubkey, action)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

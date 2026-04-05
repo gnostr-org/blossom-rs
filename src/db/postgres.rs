@@ -72,7 +72,7 @@ impl PostgresDatabase {
     }
 
     fn block_on<F: std::future::Future<Output = T>, T>(future: F) -> T {
-        tokio::runtime::Handle::current().block_on(future)
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
     }
 }
 
@@ -126,6 +126,7 @@ impl BlobDatabase for PostgresDatabase {
                 mime_type: row.2,
                 pubkey: row.3,
                 created_at: row.4 as u64,
+                phash: None,
             })
         })
     }
@@ -149,6 +150,7 @@ impl BlobDatabase for PostgresDatabase {
                     mime_type: r.2,
                     pubkey: r.3,
                     created_at: r.4 as u64,
+                    phash: None,
                 })
                 .collect())
         })

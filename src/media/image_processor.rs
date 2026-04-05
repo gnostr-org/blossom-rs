@@ -1,16 +1,14 @@
 //! Image processing implementation using the `image` crate.
 //!
-//! Behind the `media` feature flag. Provides WebP conversion, thumbnail
-//! generation, blurhash computation, EXIF validation, and perceptual hashing.
+//! Behind the `media` feature flag. Provides thumbnail generation,
+//! blurhash computation, EXIF validation, and perceptual hashing.
 
 use super::{MediaError, MediaProcessor, MediaResult};
 
-/// Image processor using the `image`, `webp`, `blurhash`, and `kamadak-exif` crates.
+/// Image processor using the `image`, `blurhash`, and `kamadak-exif` crates.
 pub struct ImageProcessor {
     /// Maximum thumbnail dimension (width or height).
     pub thumbnail_max_size: u32,
-    /// Whether to strip EXIF data from processed images.
-    pub strip_exif: bool,
     /// Whether to reject images with GPS EXIF data.
     pub reject_gps_exif: bool,
 }
@@ -19,7 +17,6 @@ impl Default for ImageProcessor {
     fn default() -> Self {
         Self {
             thumbnail_max_size: 200,
-            strip_exif: true,
             reject_gps_exif: true,
         }
     }
@@ -28,6 +25,14 @@ impl Default for ImageProcessor {
 impl ImageProcessor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create with custom thumbnail size and GPS rejection policy.
+    pub fn with_config(thumbnail_max_size: u32, reject_gps_exif: bool) -> Self {
+        Self {
+            thumbnail_max_size,
+            reject_gps_exif,
+        }
     }
 }
 
@@ -58,14 +63,20 @@ impl MediaProcessor for ImageProcessor {
             )
             .map_err(|e| MediaError::ProcessingFailed(format!("thumbnail: {e}")))?;
 
+        // Compute blurhash.
+        let blurhash = self.blurhash(data).ok();
+
+        // Compute perceptual hash.
+        let phash = self.perceptual_hash(data).ok();
+
         Ok(MediaResult {
             data: data.to_vec(),
             mime_type: mime_type.to_string(),
             width: Some(width),
             height: Some(height),
-            blurhash: None, // TODO: compute blurhash
+            blurhash,
             thumbnail: Some(thumb_bytes),
-            phash: None, // TODO: compute perceptual hash
+            phash,
         })
     }
 
@@ -73,7 +84,6 @@ impl MediaProcessor for ImageProcessor {
         let reader = std::io::Cursor::new(data);
         let exif_reader = exif::Reader::new();
         if let Ok(exif) = exif_reader.read_from_container(&mut std::io::BufReader::new(reader)) {
-            // Check for GPS fields.
             for field in exif.fields() {
                 let tag_str = format!("{}", field.tag);
                 if tag_str.contains("GPS") {
@@ -89,7 +99,6 @@ impl MediaProcessor for ImageProcessor {
     }
 
     fn perceptual_hash(&self, data: &[u8]) -> Result<u64, MediaError> {
-        // Simple DCT-based perceptual hash.
         let img = image::load_from_memory(data)
             .map_err(|e| MediaError::ProcessingFailed(format!("decode: {e}")))?;
 
@@ -118,7 +127,8 @@ impl MediaProcessor for ImageProcessor {
 
         let small = img.resize(32, 32, image::imageops::FilterType::Lanczos3);
         let rgba = small.to_rgba8();
-        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+        let w = rgba.width();
+        let h = rgba.height();
         let pixels: Vec<u8> = rgba.into_raw();
 
         let hash = blurhash::encode(4, 3, w, h, &pixels)
@@ -144,5 +154,273 @@ impl MediaProcessor for ImageProcessor {
             )
             .map_err(|e| MediaError::ProcessingFailed(format!("thumbnail: {e}")))?;
         Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Generate a simple PNG image programmatically.
+    fn make_test_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(width, height, |_x, _y| image::Rgb(color));
+        let mut bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        bytes
+    }
+
+    /// Generate a gradient PNG for perceptual hash testing.
+    fn make_gradient_png(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(width, height, |x, _y| {
+            let v = (x * 255 / width.max(1)) as u8;
+            image::Rgb([v, v, v])
+        });
+        let mut bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn test_process_png() {
+        let proc = ImageProcessor::new();
+        let png = make_test_png(100, 80, [255, 0, 0]);
+
+        let result = proc.process(&png, "image/png").unwrap();
+        assert_eq!(result.width, Some(100));
+        assert_eq!(result.height, Some(80));
+        assert_eq!(result.mime_type, "image/png");
+        assert!(result.thumbnail.is_some());
+        assert!(result.blurhash.is_some());
+        assert!(result.phash.is_some());
+        // Thumbnail should be a valid PNG.
+        let thumb_data = result.thumbnail.unwrap();
+        let thumb = image::load_from_memory(&thumb_data).unwrap();
+        assert!(thumb.width() <= 200);
+        assert!(thumb.height() <= 200);
+    }
+
+    #[test]
+    fn test_process_rejects_non_image() {
+        let proc = ImageProcessor::new();
+        let result = proc.process(b"not an image", "text/plain");
+        assert!(matches!(result, Err(MediaError::UnsupportedType(_))));
+    }
+
+    #[test]
+    fn test_process_rejects_corrupt_image() {
+        let proc = ImageProcessor::new();
+        let result = proc.process(b"not valid png data", "image/png");
+        assert!(matches!(result, Err(MediaError::ProcessingFailed(_))));
+    }
+
+    #[test]
+    fn test_thumbnail_respects_max_size() {
+        let proc = ImageProcessor::with_config(50, false);
+        let png = make_test_png(400, 300, [0, 128, 255]);
+
+        let thumb_bytes = proc.thumbnail(&png, 50, 50).unwrap();
+        // Verify the thumbnail is a valid image with correct dimensions.
+        let thumb = image::load_from_memory(&thumb_bytes).unwrap();
+        assert!(thumb.width() <= 50);
+        assert!(thumb.height() <= 50);
+    }
+
+    #[test]
+    fn test_thumbnail_preserves_aspect_ratio() {
+        let proc = ImageProcessor::new();
+        let png = make_test_png(200, 100, [0, 0, 0]);
+
+        let thumb_bytes = proc.thumbnail(&png, 100, 100).unwrap();
+        let thumb = image::load_from_memory(&thumb_bytes).unwrap();
+        // 200x100 → 100x50 (aspect ratio preserved).
+        assert_eq!(thumb.width(), 100);
+        assert_eq!(thumb.height(), 50);
+    }
+
+    #[test]
+    fn test_blurhash_produces_valid_string() {
+        let proc = ImageProcessor::new();
+        let png = make_test_png(64, 64, [100, 150, 200]);
+
+        let hash = proc.blurhash(&png).unwrap();
+        assert!(!hash.is_empty());
+        // Blurhash strings are typically 20-30 chars.
+        assert!(hash.len() > 5);
+        assert!(hash.len() < 100);
+    }
+
+    #[test]
+    fn test_blurhash_deterministic() {
+        let proc = ImageProcessor::new();
+        let png = make_test_png(32, 32, [50, 100, 150]);
+
+        let hash1 = proc.blurhash(&png).unwrap();
+        let hash2 = proc.blurhash(&png).unwrap();
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_perceptual_hash_deterministic() {
+        let proc = ImageProcessor::new();
+        let png = make_test_png(100, 100, [128, 64, 32]);
+
+        let h1 = proc.perceptual_hash(&png).unwrap();
+        let h2 = proc.perceptual_hash(&png).unwrap();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_perceptual_hash_similar_images() {
+        let proc = ImageProcessor::new();
+        // Two nearly identical images — should have similar hashes.
+        let png1 = make_test_png(100, 100, [128, 64, 32]);
+        let png2 = make_test_png(100, 100, [130, 66, 34]); // Slightly different color.
+
+        let h1 = proc.perceptual_hash(&png1).unwrap();
+        let h2 = proc.perceptual_hash(&png2).unwrap();
+
+        // Hamming distance should be small for similar images.
+        let hamming = (h1 ^ h2).count_ones();
+        assert!(
+            hamming < 10,
+            "hamming distance {} too large for similar images",
+            hamming
+        );
+    }
+
+    #[test]
+    fn test_perceptual_hash_different_images() {
+        let proc = ImageProcessor::new();
+        // Solid black vs gradient — should have very different hashes.
+        let black = make_test_png(100, 100, [0, 0, 0]);
+        let gradient = make_gradient_png(100, 100);
+
+        let h1 = proc.perceptual_hash(&black).unwrap();
+        let h2 = proc.perceptual_hash(&gradient).unwrap();
+
+        let hamming = (h1 ^ h2).count_ones();
+        assert!(
+            hamming > 10,
+            "hamming distance {} too small for different images",
+            hamming
+        );
+    }
+
+    #[test]
+    fn test_perceptual_hash_scale_invariant() {
+        let proc = ImageProcessor::new();
+        // Same color, different sizes — phash is scale-invariant for solid colors.
+        let small = make_test_png(50, 50, [200, 100, 50]);
+        let large = make_test_png(500, 500, [200, 100, 50]);
+
+        let h1 = proc.perceptual_hash(&small).unwrap();
+        let h2 = proc.perceptual_hash(&large).unwrap();
+        assert_eq!(
+            h1, h2,
+            "phash should be identical for same solid color at different sizes"
+        );
+    }
+
+    #[test]
+    fn test_validate_exif_no_exif_passes() {
+        let proc = ImageProcessor::new();
+        let png = make_test_png(10, 10, [0, 0, 0]);
+        // PNGs generated by the image crate have no EXIF data.
+        proc.validate_exif(&png).unwrap();
+    }
+
+    #[test]
+    fn test_validate_exif_non_image_passes() {
+        let proc = ImageProcessor::new();
+        // Random bytes — no EXIF container found, should pass.
+        proc.validate_exif(b"not an image at all").unwrap();
+    }
+
+    #[test]
+    fn test_process_with_gps_rejection_disabled() {
+        let proc = ImageProcessor::with_config(100, false);
+        let png = make_test_png(10, 10, [0, 0, 0]);
+        // Should work fine with GPS rejection off.
+        let result = proc.process(&png, "image/png").unwrap();
+        assert_eq!(result.width, Some(10));
+    }
+
+    #[test]
+    fn test_process_full_pipeline() {
+        let proc = ImageProcessor::new();
+        let png = make_test_png(256, 128, [64, 128, 192]);
+
+        let result = proc.process(&png, "image/png").unwrap();
+
+        // Dimensions.
+        assert_eq!(result.width, Some(256));
+        assert_eq!(result.height, Some(128));
+
+        // Thumbnail generated and valid.
+        let thumb_data = result.thumbnail.unwrap();
+        let thumb = image::load_from_memory(&thumb_data).unwrap();
+        assert!(thumb.width() <= 200);
+        assert!(thumb.height() <= 200);
+
+        // Blurhash present.
+        let bh = result.blurhash.unwrap();
+        assert!(!bh.is_empty());
+
+        // Phash present.
+        assert!(result.phash.is_some());
+    }
+
+    #[test]
+    fn test_process_small_image() {
+        let proc = ImageProcessor::new();
+        // Image smaller than thumbnail max — should still work.
+        let png = make_test_png(5, 5, [255, 255, 255]);
+
+        let result = proc.process(&png, "image/png").unwrap();
+        assert_eq!(result.width, Some(5));
+        assert_eq!(result.height, Some(5));
+        assert!(result.thumbnail.is_some());
+    }
+
+    #[test]
+    fn test_process_large_image() {
+        let proc = ImageProcessor::with_config(100, false);
+        let png = make_test_png(1000, 800, [10, 20, 30]);
+
+        let result = proc.process(&png, "image/png").unwrap();
+        assert_eq!(result.width, Some(1000));
+        assert_eq!(result.height, Some(800));
+
+        // Thumbnail should be within bounds.
+        let thumb = image::load_from_memory(&result.thumbnail.unwrap()).unwrap();
+        assert!(thumb.width() <= 100);
+        assert!(thumb.height() <= 100);
+    }
+
+    #[test]
+    fn test_jpeg_format() {
+        let proc = ImageProcessor::new();
+        // Generate a JPEG.
+        let img = image::RgbImage::from_fn(50, 50, |_, _| image::Rgb([100, 150, 200]));
+        let mut bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+
+        let result = proc.process(&bytes, "image/jpeg").unwrap();
+        assert_eq!(result.width, Some(50));
+        assert_eq!(result.height, Some(50));
+        assert!(result.thumbnail.is_some());
+        assert!(result.blurhash.is_some());
     }
 }

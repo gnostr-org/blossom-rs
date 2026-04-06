@@ -8,6 +8,24 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Normalize a pubkey from hex (64 chars) or npub1 bech32 to hex.
+/// Returns `None` if the input is not a valid pubkey.
+pub fn normalize_pubkey(input: &str) -> Option<String> {
+    let input = input.trim();
+    if input.starts_with("npub1") {
+        // Decode bech32 npub1 to hex.
+        let (hrp, data) = bech32::decode(input).ok()?;
+        if hrp.as_str() != "npub" || data.len() != 32 {
+            return None;
+        }
+        Some(hex::encode(data))
+    } else if input.len() == 64 && input.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(input.to_string())
+    } else {
+        None
+    }
+}
+
 /// Actions that can be authorized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -76,13 +94,17 @@ impl Whitelist {
     }
 
     /// Add a pubkey to the whitelist at runtime.
+    /// Accepts hex or npub1 format.
     pub async fn add(&self, pubkey: String) {
-        self.pubkeys.write().await.insert(pubkey);
+        let normalized = normalize_pubkey(&pubkey).unwrap_or(pubkey);
+        self.pubkeys.write().await.insert(normalized);
     }
 
     /// Remove a pubkey from the whitelist at runtime.
+    /// Accepts hex or npub1 format.
     pub async fn remove(&self, pubkey: &str) {
-        self.pubkeys.write().await.remove(pubkey);
+        let normalized = normalize_pubkey(pubkey).unwrap_or_else(|| pubkey.to_string());
+        self.pubkeys.write().await.remove(&normalized);
     }
 
     /// Check if a pubkey is whitelisted (async version for direct use).
@@ -100,13 +122,17 @@ impl Whitelist {
         self.pubkeys.read().await.is_empty()
     }
 
+    /// List all whitelisted pubkeys.
+    pub async fn list(&self) -> Vec<String> {
+        self.pubkeys.read().await.iter().cloned().collect()
+    }
+
     fn parse_pubkeys(content: &str) -> HashSet<String> {
         content
             .lines()
             .map(|line| line.trim())
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .filter(|line| line.len() == 64 && line.chars().all(|c| c.is_ascii_hexdigit()))
-            .map(|line| line.to_string())
+            .filter_map(normalize_pubkey)
             .collect()
     }
 }
@@ -202,5 +228,68 @@ mod tests {
         assert!(!wl.is_allowed(&"0".repeat(64), Action::Upload));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_normalize_pubkey_hex() {
+        let hex = "a".repeat(64);
+        assert_eq!(normalize_pubkey(&hex), Some(hex));
+    }
+
+    #[test]
+    fn test_normalize_pubkey_npub() {
+        // Generate a known keypair and encode as npub1.
+        let hex_key = "a".repeat(64);
+        let bytes = hex::decode(&hex_key).unwrap();
+        let hrp = bech32::Hrp::parse("npub").unwrap();
+        let npub = bech32::encode::<bech32::Bech32>(hrp, &bytes).unwrap();
+        assert!(npub.starts_with("npub1"));
+
+        let normalized = normalize_pubkey(&npub).unwrap();
+        assert_eq!(normalized, hex_key);
+    }
+
+    #[test]
+    fn test_normalize_pubkey_invalid() {
+        assert_eq!(normalize_pubkey("too_short"), None);
+        assert_eq!(normalize_pubkey("g".repeat(64).as_str()), None);
+        assert_eq!(normalize_pubkey("npub1invalid"), None);
+        assert_eq!(normalize_pubkey(""), None);
+    }
+
+    #[test]
+    fn test_whitelist_file_with_npub() {
+        let dir = std::env::temp_dir().join(format!("blossom_npub_{}", rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("whitelist.txt");
+
+        let hex_key = "b".repeat(64);
+        let bytes = hex::decode(&hex_key).unwrap();
+        let hrp = bech32::Hrp::parse("npub").unwrap();
+        let npub = bech32::encode::<bech32::Bech32>(hrp, &bytes).unwrap();
+
+        // Mix hex and npub formats in the same file.
+        let content = format!("# mixed formats\n{}\n{}\n", "a".repeat(64), npub);
+        std::fs::write(&file, &content).unwrap();
+
+        let wl = Whitelist::from_file(&file).unwrap();
+        assert!(wl.is_allowed(&"a".repeat(64), Action::Upload));
+        assert!(wl.is_allowed(&hex_key, Action::Upload)); // npub decoded to hex
+        assert!(!wl.is_allowed(&"c".repeat(64), Action::Upload));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_whitelist_list() {
+        let mut keys = HashSet::new();
+        keys.insert("a".repeat(64));
+        keys.insert("b".repeat(64));
+        let wl = Whitelist::new(keys);
+
+        let list = wl.list().await;
+        assert_eq!(list.len(), 2);
+        assert!(list.contains(&"a".repeat(64)));
+        assert!(list.contains(&"b".repeat(64)));
     }
 }

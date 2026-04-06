@@ -276,7 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let wl = Whitelist::from_file(wl_path)?;
         info!(path = %wl_path.display(), "loaded pubkey whitelist");
         let wl = Arc::new(wl);
-        builder = builder.access_control(wl.clone());
+        builder = builder.whitelist(wl.clone());
         Some(wl)
     } else {
         None

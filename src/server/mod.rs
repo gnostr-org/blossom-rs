@@ -59,6 +59,8 @@ pub struct ServerState {
     backend: Box<dyn BlobBackend>,
     database: Box<dyn BlobDatabase>,
     access: Box<dyn AccessControl>,
+    /// Live whitelist handle for runtime add/remove (if whitelist is in use).
+    pub whitelist: Option<Arc<crate::access::Whitelist>>,
     stats: StatsAccumulator,
     rate_limiter: Option<RateLimiter>,
     notifier: Box<dyn WebhookNotifier>,
@@ -90,6 +92,7 @@ pub struct BlobServerBuilder {
     base_url: String,
     database: Option<Box<dyn BlobDatabase>>,
     access: Option<Box<dyn AccessControl>>,
+    whitelist: Option<Arc<crate::access::Whitelist>>,
     requirements: UploadRequirements,
     body_limit: usize,
     rate_limiter: Option<RateLimiter>,
@@ -107,6 +110,14 @@ impl BlobServerBuilder {
     /// Set an access control policy.
     pub fn access_control(mut self, ac: impl AccessControl + 'static) -> Self {
         self.access = Some(Box::new(ac));
+        self
+    }
+
+    /// Set a whitelist as the access control policy with a live handle
+    /// for runtime add/remove via admin endpoints.
+    pub fn whitelist(mut self, wl: Arc<crate::access::Whitelist>) -> Self {
+        self.access = Some(Box::new(wl.clone()));
+        self.whitelist = Some(wl);
         self
     }
 
@@ -160,6 +171,7 @@ impl BlobServerBuilder {
                 .database
                 .unwrap_or_else(|| Box::new(MemoryDatabase::new())),
             access: self.access.unwrap_or_else(|| Box::new(OpenAccess)),
+            whitelist: self.whitelist,
             stats: StatsAccumulator::new(),
             rate_limiter: self.rate_limiter,
             notifier: self.notifier.unwrap_or_else(|| Box::new(NoopNotifier)),
@@ -219,6 +231,7 @@ impl BlobServer {
             base_url: base_url.to_string(),
             database: None,
             access: None,
+            whitelist: None,
             requirements: UploadRequirements::default(),
             body_limit: 256 * 1024 * 1024, // 256 MB default
             rate_limiter: None,
@@ -336,13 +349,37 @@ fn is_valid_sha256(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Extract Content-Type from request headers, defaulting to octet-stream.
-fn extract_content_type(headers: &HeaderMap) -> String {
-    headers
+/// Extract Content-Type from request headers. If missing or generic
+/// (`application/octet-stream`), returns `None` so the caller can
+/// fall back to magic byte detection.
+fn extract_content_type(headers: &HeaderMap) -> Option<String> {
+    let ct = headers
         .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string()
+        .and_then(|v| v.to_str().ok())?;
+    if ct == "application/octet-stream" {
+        None
+    } else {
+        Some(ct.to_string())
+    }
+}
+
+/// Detect MIME type from magic bytes in the data.
+fn detect_mime(data: &[u8]) -> String {
+    if data.len() < 4 {
+        return "application/octet-stream".to_string();
+    }
+    match &data[..4] {
+        [0x89, b'P', b'N', b'G'] => "image/png",
+        [0xFF, 0xD8, 0xFF, _] => "image/jpeg",
+        [b'G', b'I', b'F', b'8'] => "image/gif",
+        [b'R', b'I', b'F', b'F'] if data.len() > 12 && &data[8..12] == b"WEBP" => "image/webp",
+        [0x25, b'P', b'D', b'F'] => "application/pdf",
+        [b'P', b'K', 0x03, 0x04] => "application/zip",
+        [0x1F, 0x8B, _, _] => "application/gzip",
+        _ if data.len() > 8 && &data[4..8] == b"ftyp" => "video/mp4",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -428,16 +465,17 @@ async fn handle_upload(
         extract_auth_event(&headers).ok().map(|e| e.pubkey)
     };
 
+    // Detect Content-Type before moving data into backend.
+    let content_type = extract_content_type(&headers).unwrap_or_else(|| detect_mime(&data));
+
     let base_url = s.base_url.clone();
     let descriptor = s.backend.insert(data, &base_url);
 
     // Record span fields now that we know the sha256.
     tracing::Span::current().record("blob.sha256", descriptor.sha256.as_str());
 
-    // Record in database with Content-Type from request header.
     let upload_pubkey = pubkey.unwrap_or_else(|| "anonymous".to_string());
     tracing::Span::current().record("auth.pubkey", upload_pubkey.as_str());
-    let content_type = extract_content_type(&headers);
     let record = UploadRecord {
         sha256: descriptor.sha256.clone(),
         size: descriptor.size,
@@ -502,16 +540,28 @@ async fn handle_get_blob(
 async fn handle_head_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
-) -> StatusCode {
+) -> impl IntoResponse {
     let sha256 = sha256.split('.').next().unwrap_or(&sha256).to_string();
     if !is_valid_sha256(&sha256) {
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let s = state.lock().await;
-    if s.backend.exists(&sha256) {
-        StatusCode::OK
-    } else {
-        StatusCode::NOT_FOUND
+    match s.backend.get(&sha256) {
+        Some(data) => {
+            let size = data.len();
+            (
+                StatusCode::OK,
+                [
+                    (axum::http::header::CONTENT_LENGTH, size.to_string()),
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        "application/octet-stream".to_string(),
+                    ),
+                ],
+            )
+                .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -831,20 +881,7 @@ async fn handle_media_upload(
     (StatusCode::OK, Json(response))
 }
 
-/// Simple MIME type detection from magic bytes.
-fn detect_mime(data: &[u8]) -> String {
-    if data.len() < 4 {
-        return "application/octet-stream".to_string();
-    }
-    match &data[..4] {
-        [0x89, b'P', b'N', b'G'] => "image/png",
-        [0xFF, 0xD8, 0xFF, _] => "image/jpeg",
-        [b'G', b'I', b'F', b'8'] => "image/gif",
-        [b'R', b'I', b'F', b'F'] if data.len() > 12 && &data[8..12] == b"WEBP" => "image/webp",
-        _ => "application/octet-stream",
-    }
-    .to_string()
-}
+// detect_mime is defined above, shared by upload and media handlers.
 
 // ---------------------------------------------------------------------------
 // BUD-06: Upload requirements

@@ -1,5 +1,31 @@
 # Release Notes
 
+## v0.2.1
+
+### Bug Fixes
+
+- **HEAD `/:sha256` returns `Content-Length`** — was returning 0, now returns actual blob size.
+
+### New Features
+
+- **`blossom-cli media <FILE>`** — upload with server-side processing (BUD-05 `PUT /media`). Returns optimized blob descriptor with blurhash, dimensions, and perceptual hash.
+- **`blossom-cli admin` subcommand** — CLI interface for admin endpoints:
+  - `admin stats` — server statistics
+  - `admin get-user <PUBKEY>` — user info + quota
+  - `admin set-quota <PUBKEY> [BYTES]` — set user quota (omit for unlimited)
+  - `admin list-blobs` — blob count + total size
+  - `admin delete-blob <SHA256>` — admin delete (no ownership check)
+  - `admin whitelist-list` — list all whitelisted pubkeys
+  - `admin whitelist-add <PUBKEY>` — add pubkey to whitelist at runtime
+  - `admin whitelist-remove <PUBKEY>` — remove pubkey from whitelist at runtime
+- **Live whitelist management API** — `PUT/DELETE /admin/whitelist/:pubkey` and `GET /admin/whitelist` endpoints for runtime access control changes without server restart.
+- **`BlobServerBuilder::whitelist()`** — new builder method that sets access control and stores a live handle for admin endpoints.
+- **`Whitelist::list()`** — new method to enumerate all whitelisted pubkeys.
+- **`blossom-cli upload --content-type <MIME>`** — override auto-detected Content-Type.
+- **Server-side MIME auto-detection** — server detects Content-Type from magic bytes (PNG, JPEG, GIF, WebP, PDF, ZIP, GZIP, MP4) when header is missing or generic.
+
+---
+
 ## v0.2.0
 
 ### Breaking Changes

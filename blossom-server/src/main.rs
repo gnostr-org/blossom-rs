@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use std::sync::Arc as StdArc;
 
-use blossom_rs::access::Whitelist;
+use blossom_rs::access::{normalize_pubkey, RoleBasedAccess, Whitelist};
 use blossom_rs::db::MemoryDatabase;
 use blossom_rs::ratelimit::{RateLimitConfig, RateLimiter};
 use blossom_rs::server::admin::admin_router;
@@ -43,9 +43,31 @@ struct Args {
     #[arg(long)]
     memory: bool,
 
-    /// SQLite database path for metadata (ignored with --memory).
+    /// S3-compatible endpoint URL (e.g., https://account.r2.cloudflarestorage.com).
+    /// When set, uses S3 backend instead of filesystem.
+    #[arg(long)]
+    s3_endpoint: Option<String>,
+
+    /// S3 bucket name (required with --s3-endpoint).
+    #[arg(long, default_value = "blobs")]
+    s3_bucket: String,
+
+    /// S3 region (use "auto" for Cloudflare R2).
+    #[arg(long, default_value = "auto")]
+    s3_region: String,
+
+    /// S3 CDN/public URL prefix for blob URLs (optional).
+    #[arg(long)]
+    s3_public_url: Option<String>,
+
+    /// SQLite database path for metadata (default).
     #[arg(long, default_value = "./blossom.db")]
     db_path: String,
+
+    /// PostgreSQL connection URL (e.g., postgres://user:pass@localhost/blobs).
+    /// When set, uses Postgres instead of SQLite for metadata.
+    #[arg(long)]
+    db_postgres: Option<String>,
 
     /// Require BIP-340 Nostr auth for uploads.
     #[arg(long)]
@@ -107,9 +129,14 @@ struct Args {
     #[arg(long, value_delimiter = ',')]
     cors_origins: Vec<String>,
 
-    /// Enable admin endpoints (requires --whitelist for access control).
+    /// Enable admin endpoints.
     #[arg(long)]
     enable_admin: bool,
+
+    /// Bootstrap admin pubkey (hex or npub1). Persisted in the database.
+    /// Can be specified multiple times.
+    #[arg(long = "admin", value_delimiter = ',')]
+    admin_pubkeys: Vec<String>,
 
     /// Enable media processing on PUT /media (BUD-05).
     #[arg(long)]
@@ -123,6 +150,15 @@ struct Args {
     /// Generated automatically if file doesn't exist.
     #[arg(long, default_value = "./iroh_secret.key")]
     iroh_key_file: PathBuf,
+
+    /// Enable PKARR endpoint discovery (requires --iroh).
+    /// Publishes _blossom and _iroh TXT records to PKARR relays.
+    #[arg(long)]
+    pkarr: bool,
+
+    /// PKARR republish interval in seconds.
+    #[arg(long, default_value = "3600")]
+    pkarr_republish_secs: u64,
 
     /// Log level.
     #[arg(long, default_value = "info")]
@@ -154,20 +190,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // Build the server with the configured backend and database.
+    // Build storage backend.
     let mut builder = if args.memory {
         info!("using in-memory storage (no persistence)");
-        BlobServer::builder(MemoryBackend::new(), &args.base_url).database(MemoryDatabase::new())
+        BlobServer::builder(MemoryBackend::new(), &args.base_url)
+    } else if let Some(ref s3_endpoint) = args.s3_endpoint {
+        let s3_config = blossom_rs::storage::S3Config {
+            endpoint: Some(s3_endpoint.clone()),
+            bucket: args.s3_bucket.clone(),
+            region: args.s3_region.clone(),
+            public_url: args.s3_public_url.clone(),
+        };
+        let backend = blossom_rs::storage::S3Backend::new(s3_config)
+            .await
+            .map_err(|e| format!("S3 backend: {e}"))?;
+        info!(
+            s3.endpoint = %s3_endpoint,
+            s3.bucket = %args.s3_bucket,
+            "using S3 blob storage"
+        );
+        BlobServer::builder(backend, &args.base_url)
     } else {
         let backend = FilesystemBackend::new(&args.data_dir)?;
         info!(data_dir = %args.data_dir, "using filesystem storage");
+        BlobServer::builder(backend, &args.base_url)
+    };
 
+    // Build metadata database.
+    let mut database: Box<dyn blossom_rs::db::BlobDatabase> = if args.memory {
+        Box::new(MemoryDatabase::new())
+    } else if let Some(ref pg_url) = args.db_postgres {
+        let db = blossom_rs::db::PostgresDatabase::new(pg_url)
+            .await
+            .map_err(|e| format!("Postgres: {e}"))?;
+        info!(db = "postgres", "using PostgreSQL metadata database");
+        Box::new(db)
+    } else {
         let db_url = format!("sqlite:{}?mode=rwc", args.db_path);
         let db = blossom_rs::db::SqliteDatabase::new(&db_url).await?;
         info!(db_path = %args.db_path, "using SQLite metadata database");
-
-        BlobServer::builder(backend, &args.base_url).database(db)
+        Box::new(db)
     };
+
+    // Bootstrap admin pubkeys from --admin flag.
+    for admin_pk in &args.admin_pubkeys {
+        let normalized = normalize_pubkey(admin_pk)
+            .ok_or_else(|| format!("invalid admin pubkey: {admin_pk}"))?;
+        database
+            .set_role(&normalized, "admin")
+            .map_err(|e| format!("set admin role: {e}"))?;
+        info!(pubkey = %normalized, "bootstrapped admin role");
+    }
+
+    // Load roles from database into in-memory access control.
+    let role_access = Arc::new(RoleBasedAccess::load_from_database(database.as_mut()).await);
+    builder = builder.role_based_access(role_access.clone());
+    builder = builder.database_boxed(database);
 
     if args.require_auth {
         builder = builder.require_auth();
@@ -213,13 +291,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("media processing enabled (PUT /media)");
     }
 
-    // Whitelist setup.
-    let whitelist: Option<Arc<Whitelist>> = if let Some(ref wl_path) = args.whitelist {
-        let wl = Whitelist::from_file(wl_path)?;
-        info!(path = %wl_path.display(), "loaded pubkey whitelist");
-        let wl = Arc::new(wl);
-        builder = builder.access_control(wl.clone());
-        Some(wl)
+    // Whitelist setup (only if no --admin flags set role-based access).
+    let whitelist: Option<Arc<Whitelist>> = if args.admin_pubkeys.is_empty() {
+        if let Some(ref wl_path) = args.whitelist {
+            let wl = Whitelist::from_file(wl_path)?;
+            info!(path = %wl_path.display(), "loaded pubkey whitelist");
+            let wl = Arc::new(wl);
+            builder = builder.whitelist(wl.clone());
+            Some(wl)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -297,10 +379,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             key
         };
 
-        // Build iroh state — shares the same storage backend type but separate instance.
-        // For a production server, you'd share the backend via Arc.
+        // Build iroh state — shares the same filesystem directory as HTTP.
+        // For MemoryBackend, creates a shared instance. For FilesystemBackend,
+        // both transports point at the same directory (content-addressed = shared).
         let iroh_state = StdArc::new(tokio::sync::Mutex::new(IrohState {
             backend: if args.memory {
+                // For memory mode, blobs uploaded via iroh won't be visible via HTTP
+                // and vice versa. Use filesystem mode for shared storage.
+                warn!("--memory mode: iroh and HTTP have separate blob stores. Use filesystem for shared storage.");
                 Box::new(MemoryBackend::new())
             } else {
                 Box::new(
@@ -309,7 +395,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             },
             database: Box::new(MemoryDatabase::new()),
+            access: if let Some(ref wl_path) = args.whitelist {
+                let wl = Whitelist::from_file(wl_path)?;
+                Box::new(Arc::new(wl))
+            } else {
+                Box::new(blossom_rs::access::OpenAccess)
+            },
             base_url: args.base_url.clone(),
+            max_upload_size: args.max_upload_size,
+            require_auth: args.require_auth,
         }));
 
         let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
@@ -333,6 +427,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+
+    // Start PKARR endpoint discovery if enabled.
+    if args.pkarr {
+        if !args.iroh {
+            warn!("--pkarr requires --iroh to be enabled; skipping PKARR");
+        } else {
+            // Read the iroh secret key for unified identity.
+            let key_bytes: [u8; 32] = std::fs::read(&args.iroh_key_file)
+                .map_err(|e| format!("read iroh key for pkarr: {e}"))?
+                .try_into()
+                .map_err(|_| "iroh key file must be 32 bytes")?;
+
+            let iroh_key = iroh::SecretKey::from_bytes(&key_bytes);
+            let node_id = iroh_key.public();
+
+            use blossom_rs::transport::pkarr_discovery::{PkarrConfig, PkarrPublisher};
+            let publisher = StdArc::new(PkarrPublisher::new(
+                &key_bytes,
+                PkarrConfig {
+                    http_url: Some(args.base_url.clone()),
+                    iroh_node_id: Some(node_id.to_string()),
+                    republish_interval: std::time::Duration::from_secs(args.pkarr_republish_secs),
+                    ttl: 3600,
+                },
+            ));
+
+            info!(
+                pkarr.public_key = %publisher.public_key(),
+                "PKARR discovery enabled — pk:{}",
+                publisher.public_key(),
+            );
+            publisher.spawn_republish_loop();
+        }
+    }
 
     info!(bind = %args.bind, base_url = %args.base_url, "starting blossom server");
 

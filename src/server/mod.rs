@@ -28,7 +28,7 @@ use axum::{
 use tokio::sync::Mutex;
 use tracing::{info, instrument, warn};
 
-use crate::access::{AccessControl, Action, OpenAccess};
+use crate::access::{AccessControl, Action, OpenAccess, Role};
 use crate::auth::{verify_blossom_auth, verify_nip98_auth, AuthError};
 use crate::db::{BlobDatabase, DbError, MemoryDatabase, UploadRecord};
 use crate::media::MediaProcessor;
@@ -59,6 +59,8 @@ pub struct ServerState {
     backend: Box<dyn BlobBackend>,
     database: Box<dyn BlobDatabase>,
     access: Box<dyn AccessControl>,
+    /// Live whitelist handle for runtime add/remove (if whitelist is in use).
+    pub whitelist: Option<Arc<crate::access::Whitelist>>,
     stats: StatsAccumulator,
     rate_limiter: Option<RateLimiter>,
     notifier: Box<dyn WebhookNotifier>,
@@ -90,6 +92,7 @@ pub struct BlobServerBuilder {
     base_url: String,
     database: Option<Box<dyn BlobDatabase>>,
     access: Option<Box<dyn AccessControl>>,
+    whitelist: Option<Arc<crate::access::Whitelist>>,
     requirements: UploadRequirements,
     body_limit: usize,
     rate_limiter: Option<RateLimiter>,
@@ -104,9 +107,30 @@ impl BlobServerBuilder {
         self
     }
 
+    /// Set a database backend from a boxed trait object.
+    pub fn database_boxed(mut self, db: Box<dyn BlobDatabase>) -> Self {
+        self.database = Some(db);
+        self
+    }
+
     /// Set an access control policy.
     pub fn access_control(mut self, ac: impl AccessControl + 'static) -> Self {
         self.access = Some(Box::new(ac));
+        self
+    }
+
+    /// Set a whitelist as the access control policy with a live handle
+    /// for runtime add/remove via admin endpoints.
+    pub fn whitelist(mut self, wl: Arc<crate::access::Whitelist>) -> Self {
+        self.access = Some(Box::new(wl.clone()));
+        self.whitelist = Some(wl);
+        self
+    }
+
+    /// Set a role-based access control policy with a live handle for
+    /// runtime admin/member management.
+    pub fn role_based_access(mut self, rba: Arc<crate::access::RoleBasedAccess>) -> Self {
+        self.access = Some(Box::new(rba));
         self
     }
 
@@ -160,6 +184,7 @@ impl BlobServerBuilder {
                 .database
                 .unwrap_or_else(|| Box::new(MemoryDatabase::new())),
             access: self.access.unwrap_or_else(|| Box::new(OpenAccess)),
+            whitelist: self.whitelist,
             stats: StatsAccumulator::new(),
             rate_limiter: self.rate_limiter,
             notifier: self.notifier.unwrap_or_else(|| Box::new(NoopNotifier)),
@@ -219,6 +244,7 @@ impl BlobServer {
             base_url: base_url.to_string(),
             database: None,
             access: None,
+            whitelist: None,
             requirements: UploadRequirements::default(),
             body_limit: 256 * 1024 * 1024, // 256 MB default
             rate_limiter: None,
@@ -320,6 +346,55 @@ fn error_json(msg: &str) -> Json<serde_json::Value> {
     Json(serde_json::json!({"error": msg}))
 }
 
+/// Serialize a value to JSON for HTTP response. Falls back to error JSON on failure.
+fn to_json_response(value: &impl serde::Serialize) -> (StatusCode, Json<serde_json::Value>) {
+    match serde_json::to_value(value) {
+        Ok(v) => (StatusCode::OK, Json(v)),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_json(&format!("serialization error: {e}")),
+        ),
+    }
+}
+
+/// Validate that a string is a valid SHA256 hex hash (64 lowercase hex chars).
+fn is_valid_sha256(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Extract Content-Type from request headers. If missing or generic
+/// (`application/octet-stream`), returns `None` so the caller can
+/// fall back to magic byte detection.
+fn extract_content_type(headers: &HeaderMap) -> Option<String> {
+    let ct = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())?;
+    if ct == "application/octet-stream" {
+        None
+    } else {
+        Some(ct.to_string())
+    }
+}
+
+/// Detect MIME type from magic bytes in the data.
+fn detect_mime(data: &[u8]) -> String {
+    if data.len() < 4 {
+        return "application/octet-stream".to_string();
+    }
+    match &data[..4] {
+        [0x89, b'P', b'N', b'G'] => "image/png",
+        [0xFF, 0xD8, 0xFF, _] => "image/jpeg",
+        [b'G', b'I', b'F', b'8'] => "image/gif",
+        [b'R', b'I', b'F', b'F'] if data.len() > 12 && &data[8..12] == b"WEBP" => "image/webp",
+        [0x25, b'P', b'D', b'F'] => "application/pdf",
+        [b'P', b'K', 0x03, 0x04] => "application/zip",
+        [0x1F, 0x8B, _, _] => "application/gzip",
+        _ if data.len() > 8 && &data[4..8] == b"ftyp" => "video/mp4",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 // ---------------------------------------------------------------------------
 // BUD-01: Upload
 // ---------------------------------------------------------------------------
@@ -403,22 +478,28 @@ async fn handle_upload(
         extract_auth_event(&headers).ok().map(|e| e.pubkey)
     };
 
+    // Detect Content-Type before moving data into backend.
+    let content_type = extract_content_type(&headers).unwrap_or_else(|| detect_mime(&data));
+
     let base_url = s.base_url.clone();
-    let descriptor = s.backend.insert(data, &base_url);
+    let size = data.len() as u64;
+    let descriptor = {
+        let mut cursor = std::io::Cursor::new(data);
+        match s.backend.insert_stream(&mut cursor, size, &base_url) {
+            Ok(desc) => desc,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, error_json(&e)),
+        }
+    };
 
     // Record span fields now that we know the sha256.
     tracing::Span::current().record("blob.sha256", descriptor.sha256.as_str());
 
-    // Record in database.
     let upload_pubkey = pubkey.unwrap_or_else(|| "anonymous".to_string());
     tracing::Span::current().record("auth.pubkey", upload_pubkey.as_str());
     let record = UploadRecord {
         sha256: descriptor.sha256.clone(),
         size: descriptor.size,
-        mime_type: descriptor
-            .content_type
-            .clone()
-            .unwrap_or_else(|| "application/octet-stream".to_string()),
+        mime_type: content_type,
         pubkey: upload_pubkey,
         created_at: descriptor.uploaded.unwrap_or(0),
         phash: None,
@@ -438,7 +519,9 @@ async fn handle_upload(
 
     (
         StatusCode::OK,
-        Json(serde_json::to_value(descriptor).unwrap()),
+        serde_json::to_value(&descriptor)
+            .map(Json)
+            .unwrap_or_else(|_| error_json("serialization error")),
     )
 }
 
@@ -451,6 +534,11 @@ async fn handle_get_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
 ) -> impl IntoResponse {
+    // Strip optional file extension (BUD-01: GET /<sha256>.ext).
+    let sha256 = sha256.split('.').next().unwrap_or(&sha256).to_string();
+    if !is_valid_sha256(&sha256) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     let s = state.lock().await;
     match s.backend.get(&sha256) {
         Some(data) => {
@@ -472,12 +560,28 @@ async fn handle_get_blob(
 async fn handle_head_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
-) -> StatusCode {
+) -> impl IntoResponse {
+    let sha256 = sha256.split('.').next().unwrap_or(&sha256).to_string();
+    if !is_valid_sha256(&sha256) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     let s = state.lock().await;
-    if s.backend.exists(&sha256) {
-        StatusCode::OK
-    } else {
-        StatusCode::NOT_FOUND
+    match s.backend.get(&sha256) {
+        Some(data) => {
+            let size = data.len();
+            (
+                StatusCode::OK,
+                [
+                    (axum::http::header::CONTENT_LENGTH, size.to_string()),
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        "application/octet-stream".to_string(),
+                    ),
+                ],
+            )
+                .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -494,11 +598,21 @@ async fn handle_delete_blob(
                 return (StatusCode::UNAUTHORIZED, error_json(&e.to_string()));
             }
             let mut s = state.lock().await;
-            if !s.access.is_allowed(&event.pubkey, Action::Delete) {
+            let role = s.access.role(&event.pubkey);
+            if role == Role::Denied {
                 return (
                     StatusCode::FORBIDDEN,
                     error_json("delete not allowed for this pubkey"),
                 );
+            }
+            // Members may only delete their own blobs. Anonymous uploads
+            // (pubkey "anonymous") have no owner, so anyone may delete them.
+            if role != Role::Admin {
+                if let Ok(record) = s.database.get_upload(&sha256) {
+                    if record.pubkey != "anonymous" && record.pubkey != event.pubkey {
+                        return (StatusCode::FORBIDDEN, error_json("not the blob owner"));
+                    }
+                }
             }
             if s.backend.delete(&sha256) {
                 let _ = s.database.delete_upload(&sha256);
@@ -543,10 +657,7 @@ async fn handle_list(
                     uploaded: Some(r.created_at),
                 })
                 .collect();
-            (
-                StatusCode::OK,
-                Json(serde_json::to_value(descriptors).unwrap()),
-            )
+            to_json_response(&descriptors)
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -687,10 +798,7 @@ async fn handle_mirror(
         Some(serde_json::json!({"source_url": req.url})),
     ));
 
-    (
-        StatusCode::OK,
-        Json(serde_json::to_value(descriptor).unwrap()),
-    )
+    to_json_response(&descriptor)
 }
 
 // ---------------------------------------------------------------------------
@@ -780,7 +888,7 @@ async fn handle_media_upload(
     ));
 
     // Build response with media metadata.
-    let mut response = serde_json::to_value(&descriptor).unwrap();
+    let mut response = serde_json::to_value(&descriptor).unwrap_or_default();
     if let Some(bh) = result.blurhash {
         response["blurhash"] = serde_json::Value::String(bh);
     }
@@ -803,20 +911,7 @@ async fn handle_media_upload(
     (StatusCode::OK, Json(response))
 }
 
-/// Simple MIME type detection from magic bytes.
-fn detect_mime(data: &[u8]) -> String {
-    if data.len() < 4 {
-        return "application/octet-stream".to_string();
-    }
-    match &data[..4] {
-        [0x89, b'P', b'N', b'G'] => "image/png",
-        [0xFF, 0xD8, 0xFF, _] => "image/jpeg",
-        [b'G', b'I', b'F', b'8'] => "image/gif",
-        [b'R', b'I', b'F', b'F'] if data.len() > 12 && &data[8..12] == b"WEBP" => "image/webp",
-        _ => "application/octet-stream",
-    }
-    .to_string()
-}
+// detect_mime is defined above, shared by upload and media handlers.
 
 // ---------------------------------------------------------------------------
 // BUD-06: Upload requirements
@@ -825,7 +920,9 @@ fn detect_mime(data: &[u8]) -> String {
 #[instrument(name = "blossom.upload_requirements", skip_all)]
 async fn handle_upload_requirements(State(state): State<SharedState>) -> impl IntoResponse {
     let s = state.lock().await;
-    Json(serde_json::to_value(&s.requirements).unwrap())
+    serde_json::to_value(&s.requirements)
+        .map(Json)
+        .unwrap_or_else(|e| Json(serde_json::json!({"error": e.to_string()})))
 }
 
 // ---------------------------------------------------------------------------
@@ -835,13 +932,20 @@ async fn handle_upload_requirements(State(state): State<SharedState>) -> impl In
 #[instrument(name = "blossom.status", skip_all)]
 async fn handle_status(State(state): State<SharedState>) -> impl IntoResponse {
     let s = state.lock().await;
-    Json(serde_json::json!({
+    let mut status = serde_json::json!({
         "blobs": s.backend.len(),
         "total_bytes": s.backend.total_bytes(),
         "uploads": s.database.upload_count(),
         "users": s.database.user_count(),
         "tracked_stats": s.stats.tracked_count(),
-    }))
+    });
+    // Include build integrity info if available.
+    let integrity = crate::integrity::runtime_integrity_info(
+        option_env!("BLOSSOM_SOURCE_BUILD_HASH"),
+        option_env!("BLOSSOM_BUILD_TARGET"),
+    );
+    status["integrity"] = serde_json::to_value(&integrity).unwrap_or_default();
+    Json(status)
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,5 +1489,78 @@ mod tests {
         let resp = http.get(format!("{}/status", url)).send().await.unwrap();
         let status: serde_json::Value = resp.json().await.unwrap();
         assert!(status["tracked_stats"].as_u64().unwrap() >= 1);
+    }
+
+    // --- Ownership-enforced delete tests ---
+
+    #[tokio::test]
+    async fn test_member_cannot_delete_others_blob() {
+        let server = BlobServer::new(MemoryBackend::new(), "http://localhost:3000");
+        let url = spawn_server(server).await;
+        let http = reqwest::Client::new();
+
+        // Alice uploads a blob.
+        let alice = crate::auth::Signer::generate();
+        let auth = crate::auth::build_blossom_auth(&alice, "upload", None, None, "");
+        let resp = http
+            .put(format!("{}/upload", url))
+            .header("Authorization", crate::auth::auth_header_value(&auth))
+            .body(b"alice's data".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let desc: serde_json::Value = resp.json().await.unwrap();
+        let sha = desc["sha256"].as_str().unwrap().to_string();
+
+        // Bob tries to delete Alice's blob — should fail.
+        let bob = crate::auth::Signer::generate();
+        let del_auth = crate::auth::build_blossom_auth(&bob, "delete", None, None, "");
+        let resp = http
+            .delete(format!("{}/{}", url, sha))
+            .header("Authorization", crate::auth::auth_header_value(&del_auth))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+
+        // Alice can delete her own blob.
+        let del_auth = crate::auth::build_blossom_auth(&alice, "delete", None, None, "");
+        let resp = http
+            .delete(format!("{}/{}", url, sha))
+            .header("Authorization", crate::auth::auth_header_value(&del_auth))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_anyone_can_delete_anonymous_blob() {
+        let server = BlobServer::new(MemoryBackend::new(), "http://localhost:3000");
+        let url = spawn_server(server).await;
+        let http = reqwest::Client::new();
+
+        // Anonymous upload (no auth).
+        let resp = http
+            .put(format!("{}/upload", url))
+            .body(b"anonymous data".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let desc: serde_json::Value = resp.json().await.unwrap();
+        let sha = desc["sha256"].as_str().unwrap().to_string();
+
+        // Anyone with auth can delete anonymous blobs.
+        let signer = crate::auth::Signer::generate();
+        let del_auth = crate::auth::build_blossom_auth(&signer, "delete", None, None, "");
+        let resp = http
+            .delete(format!("{}/{}", url, sha))
+            .header("Authorization", crate::auth::auth_header_value(&del_auth))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
     }
 }

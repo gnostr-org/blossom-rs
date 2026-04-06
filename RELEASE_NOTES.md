@@ -1,5 +1,135 @@
 # Release Notes
 
+## v0.3.0
+
+### Breaking Changes
+
+- `IrohState` has new required fields: `access`, `max_upload_size`, `require_auth`
+- `UserRecord` now includes `role` field (defaults to `"member"` via serde)
+- `BlobDatabase` trait gains `set_role()`, `get_role()`, `list_users_by_role()` methods
+- `BlobBackend` trait gains `insert_stream()` method (default impl buffers to Vec for backward compat)
+- `BlobClient` trait gains `upload_file()` method
+- V3 schema migration adds `role TEXT NOT NULL DEFAULT 'member'` to `users` table (SQLite/Postgres)
+
+### Role-Based Access Control
+
+- **Admin/Member/Denied roles** — `Role` enum with `RoleBasedAccess` struct backed by DB persistence
+- **`--admin npub1...`** server flag — bootstrap admin pubkeys on first startup, persisted across restarts
+- **Ownership-enforced delete** — members can only delete their own blobs, admins can delete any blob, anonymous uploads deletable by anyone
+- Consistent enforcement across HTTP, NIP-96, and iroh QUIC transports
+- **Admin API** — `PUT /admin/users/:pubkey/role` (set role), `GET /admin/roles` (list by role)
+- `AccessControl` trait gains `role()` method with backward-compatible default
+
+### Unified Client & Transport Preference
+
+- **`BlobClient` trait** — transport-agnostic async interface using RPITIT (no `async_trait` dep needed)
+- **`MultiTransportClient`** — iroh for uploads/deletes (direct P2P), HTTP for downloads (CDN caching), automatic fallback on failure
+- **Full method parity** — both HTTP and iroh clients now support upload, download, exists, delete, list
+- CLI: `--iroh <endpoint>` and `--iroh-only` flags; all commands use `MultiTransportClient`
+
+### Streaming & Memory Efficiency
+
+- **`insert_stream()`** on `BlobBackend` — FilesystemBackend and S3Backend stream to storage via temp file + incremental SHA256 in 256KB chunks, never buffering full blobs in memory
+- **`upload_file()`** — two-pass streaming file upload (hash pass + send pass) on both HTTP and iroh clients
+- **`upload_batch_concurrent()`** — parallel file uploads with `Arc<C>` + `Semaphore` (default 8 concurrent streams)
+- **`sha256_stream()`** — incremental SHA256 from any `Read` impl
+- CLI: `batch-upload` command with `--concurrency` flag, `upload` command now streams (no `std::fs::read`)
+
+### Iroh Transport Parity
+
+- `AccessControl` added to `IrohState` — upload permission, quota, max size, and require_auth enforcement matching HTTP
+- `list()` added to `IrohBlossomClient`
+- `upload_file()` streams file chunks directly to QUIC `SendStream`
+
+### Build Integrity
+
+- **Deterministic source hashing** — `build.rs` on blossom-server and blossom-cli hashes all workspace source files via `git ls-files`, embeds aggregate hash via `rustc-env`
+- **`integrity.rs`** — `RuntimeIntegrityInfo` exposed on `GET /status`, signed release manifests with BIP-340 signature verification, Merkle tree attestation for zero-knowledge selective file disclosure
+- **xtask** — `sign-release-manifest`, `source-build-manifest`, `source-merkle-tree`, `verify-source-file`
+
+### Fixes
+
+- **OpenTelemetry** — add missing `tracing-subscriber` dep, update to `opentelemetry_sdk` 0.27 API
+- NIP-96 delete handler now enforces ownership checks
+- 140+ tests across workspace
+
+---
+
+## v0.2.1
+
+### Bug Fixes
+
+- **HEAD `/:sha256` returns `Content-Length`** — was returning 0, now returns actual blob size.
+
+### New Features
+
+- **`blossom-cli media <FILE>`** — upload with server-side processing (BUD-05 `PUT /media`). Returns optimized blob descriptor with blurhash, dimensions, and perceptual hash.
+- **`blossom-cli admin` subcommand** — CLI interface for admin endpoints:
+  - `admin stats` — server statistics
+  - `admin get-user <PUBKEY>` — user info + quota
+  - `admin set-quota <PUBKEY> [BYTES]` — set user quota (omit for unlimited)
+  - `admin list-blobs` — blob count + total size
+  - `admin delete-blob <SHA256>` — admin delete (no ownership check)
+  - `admin whitelist-list` — list all whitelisted pubkeys
+  - `admin whitelist-add <PUBKEY>` — add pubkey to whitelist at runtime
+  - `admin whitelist-remove <PUBKEY>` — remove pubkey from whitelist at runtime
+- **Live whitelist management API** — `PUT/DELETE /admin/whitelist/:pubkey` and `GET /admin/whitelist` endpoints for runtime access control changes without server restart.
+- **`BlobServerBuilder::whitelist()`** — new builder method that sets access control and stores a live handle for admin endpoints.
+- **`Whitelist::list()`** — new method to enumerate all whitelisted pubkeys.
+- **`blossom-cli upload --content-type <MIME>`** — override auto-detected Content-Type.
+- **Server-side MIME auto-detection** — server detects Content-Type from magic bytes (PNG, JPEG, GIF, WebP, PDF, ZIP, GZIP, MP4) when header is missing or generic.
+
+---
+
+## v0.2.0
+
+### Breaking Changes
+
+- `BlossomClient::with_timeout()` — new constructor for custom timeout (default still 30s).
+- SHA256 path parameters are now validated (64-char hex) — invalid paths return 400 instead of 404.
+- Upload handler uses `Content-Type` request header instead of hardcoding `application/octet-stream`.
+- `GET /<sha256>.ext` — file extension is now stripped (BUD-01 compliance).
+
+### New Features
+
+- **Server `--s3-endpoint`** — S3/R2/MinIO blob storage backend from CLI (with `--s3-bucket`, `--s3-region`, `--s3-public-url`).
+- **Server `--db-postgres`** — PostgreSQL metadata backend from CLI.
+- **Postgres versioned migrations** — `schema_version` table with V1 (initial) and V2 (phash column), matching SQLite.
+- **Iroh connection caching** — `IrohBlossomClient` reuses QUIC connections per node ID.
+- **Concurrent upload tests** — 20 parallel uploads + 10 parallel download verification.
+- **Wire protocol fuzz tests** — proptest for request/response roundtrip.
+- **Dockerfile** — Multi-stage build for `blossom-server`.
+- **MSRV** — Minimum Supported Rust Version: 1.80.
+- **CI iroh tests** — `cargo test --features iroh-transport --test iroh_integration` in CI pipeline.
+
+### Improvements
+
+- Server warns when using `--memory` + `--iroh` (separate blob stores).
+- `to_json_response()` helper replaces remaining `unwrap()` in production HTTP handlers.
+- SHA256 parameter validation on GET/HEAD/DELETE endpoints.
+- `Content-Type` from upload request header recorded in database.
+- VitLabeler and LlmLabeler marked as TODO in source.
+- 207 total tests.
+
+---
+
+## v0.1.5
+
+### New Features
+
+- **PKARR discovery** merged to master (`pkarr-discovery` feature flag). Publish blossom endpoints (`_blossom` + `_iroh` TXT records) to Mainline DHT via PKARR relays. Unified Ed25519 identity with iroh transport.
+- **`blossom-cli resolve`** — Resolve a PKARR public key (`pk:z<base32>`) to HTTP URL + iroh node ID.
+- **Server `--pkarr` flag** — Auto-publish endpoints with background republish loop.
+
+### Improvements
+
+- **CLI integration tests** — 15 new tests covering all commands, key formats, output formatting, webhook delivery, admin endpoints, error handling.
+- **Unwrap cleanup** — Replaced 8 `serde_json::to_value().unwrap()` calls in HTTP handlers with `to_json_response()` helper (returns 500 instead of panicking).
+- Removed unused imports across test files.
+- 184 total tests.
+
+---
+
 ## v0.1.4
 
 ### New Features

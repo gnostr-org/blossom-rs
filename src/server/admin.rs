@@ -26,8 +26,15 @@ pub fn admin_router(state: SharedState) -> Router {
         .route("/admin/users", get(handle_list_users))
         .route("/admin/users/:pubkey", get(handle_get_user))
         .route("/admin/users/:pubkey/quota", put(handle_set_quota))
+        .route("/admin/users/:pubkey/role", put(handle_set_role))
+        .route("/admin/roles", get(handle_list_roles))
         .route("/admin/blobs", get(handle_list_all_blobs))
         .route("/admin/blobs/:sha256", delete(handle_admin_delete_blob))
+        .route("/admin/whitelist", get(handle_whitelist_list))
+        .route(
+            "/admin/whitelist/:pubkey",
+            put(handle_whitelist_add).delete(handle_whitelist_remove),
+        )
         .with_state(state)
 }
 
@@ -205,6 +212,170 @@ async fn handle_admin_delete_blob(
         (StatusCode::OK, Json(serde_json::json!({"deleted": true})))
     } else {
         (StatusCode::NOT_FOUND, error_json("blob not found"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Whitelist management
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Role management
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct SetRoleRequest {
+    role: String,
+}
+
+#[instrument(name = "admin.set_role", skip_all, fields(target.pubkey = %pubkey))]
+async fn handle_set_role(
+    State(state): State<SharedState>,
+    Path(pubkey): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SetRoleRequest>,
+) -> impl IntoResponse {
+    let mut s = state.lock().await;
+    if let Err(e) = extract_admin_pubkey(&headers, &*s.access) {
+        return e;
+    }
+
+    let normalized = crate::access::normalize_pubkey(&pubkey).unwrap_or(pubkey);
+    let role = body.role.to_lowercase();
+    if !matches!(role.as_str(), "admin" | "member" | "denied") {
+        return (
+            StatusCode::BAD_REQUEST,
+            error_json("role must be 'admin', 'member', or 'denied'"),
+        );
+    }
+
+    if let Err(e) = s.database.set_role(&normalized, &role) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_json(&format!("set role: {e}")),
+        );
+    }
+
+    tracing::info!(target.pubkey = %normalized, role = %role, "role updated via admin API");
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "pubkey": normalized,
+            "role": role,
+        })),
+    )
+}
+
+#[instrument(name = "admin.list_roles", skip_all)]
+async fn handle_list_roles(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let s = state.lock().await;
+    if let Err(e) = extract_admin_pubkey(&headers, &*s.access) {
+        return e;
+    }
+
+    let admins = s
+        .database
+        .list_users_by_role("admin")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|u| u.pubkey)
+        .collect::<Vec<_>>();
+    let members = s
+        .database
+        .list_users_by_role("member")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|u| u.pubkey)
+        .collect::<Vec<_>>();
+    let denied = s
+        .database
+        .list_users_by_role("denied")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|u| u.pubkey)
+        .collect::<Vec<_>>();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "admins": admins,
+            "members": members,
+            "denied": denied,
+        })),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Whitelist management
+// ---------------------------------------------------------------------------
+
+#[instrument(name = "admin.whitelist_list", skip_all)]
+async fn handle_whitelist_list(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let s = state.lock().await;
+    if let Err(e) = extract_admin_pubkey(&headers, &*s.access) {
+        return e;
+    }
+
+    match &s.whitelist {
+        Some(wl) => {
+            let keys: Vec<String> = wl.list().await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "count": keys.len(),
+                    "pubkeys": keys,
+                })),
+            )
+        }
+        None => (StatusCode::NOT_FOUND, error_json("no whitelist configured")),
+    }
+}
+
+#[instrument(name = "admin.whitelist_add", skip_all, fields(whitelist.pubkey = %pubkey))]
+async fn handle_whitelist_add(
+    State(state): State<SharedState>,
+    Path(pubkey): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let s = state.lock().await;
+    if let Err(e) = extract_admin_pubkey(&headers, &*s.access) {
+        return e;
+    }
+
+    match &s.whitelist {
+        Some(wl) => {
+            wl.add(pubkey.clone()).await;
+            tracing::info!(whitelist.pubkey = %pubkey, "pubkey added to whitelist");
+            (StatusCode::OK, Json(serde_json::json!({"added": pubkey})))
+        }
+        None => (StatusCode::NOT_FOUND, error_json("no whitelist configured")),
+    }
+}
+
+#[instrument(name = "admin.whitelist_remove", skip_all, fields(whitelist.pubkey = %pubkey))]
+async fn handle_whitelist_remove(
+    State(state): State<SharedState>,
+    Path(pubkey): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let s = state.lock().await;
+    if let Err(e) = extract_admin_pubkey(&headers, &*s.access) {
+        return e;
+    }
+
+    match &s.whitelist {
+        Some(wl) => {
+            wl.remove(&pubkey).await;
+            tracing::info!(whitelist.pubkey = %pubkey, "pubkey removed from whitelist");
+            (StatusCode::OK, Json(serde_json::json!({"removed": pubkey})))
+        }
+        None => (StatusCode::NOT_FOUND, error_json("no whitelist configured")),
     }
 }
 

@@ -5,8 +5,6 @@
 
 use std::collections::HashSet;
 
-use std::sync::Arc;
-
 use blossom_rs::access::Whitelist;
 use blossom_rs::auth::{auth_header_value, build_blossom_auth};
 use blossom_rs::db::{MemoryDatabase, SqliteDatabase};

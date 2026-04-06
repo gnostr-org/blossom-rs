@@ -121,6 +121,13 @@ impl BlobServerBuilder {
         self
     }
 
+    /// Set a role-based access control policy with a live handle for
+    /// runtime admin/member management.
+    pub fn role_based_access(mut self, rba: Arc<crate::access::RoleBasedAccess>) -> Self {
+        self.access = Some(Box::new(rba));
+        self
+    }
+
     /// Require auth for uploads.
     pub fn require_auth(mut self) -> Self {
         self.requirements.require_auth = true;

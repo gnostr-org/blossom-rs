@@ -1,5 +1,60 @@
 # Release Notes
 
+## v0.3.0
+
+### Breaking Changes
+
+- `IrohState` has new required fields: `access`, `max_upload_size`, `require_auth`
+- `UserRecord` now includes `role` field (defaults to `"member"` via serde)
+- `BlobDatabase` trait gains `set_role()`, `get_role()`, `list_users_by_role()` methods
+- `BlobBackend` trait gains `insert_stream()` method (default impl buffers to Vec for backward compat)
+- `BlobClient` trait gains `upload_file()` method
+- V3 schema migration adds `role TEXT NOT NULL DEFAULT 'member'` to `users` table (SQLite/Postgres)
+
+### Role-Based Access Control
+
+- **Admin/Member/Denied roles** — `Role` enum with `RoleBasedAccess` struct backed by DB persistence
+- **`--admin npub1...`** server flag — bootstrap admin pubkeys on first startup, persisted across restarts
+- **Ownership-enforced delete** — members can only delete their own blobs, admins can delete any blob, anonymous uploads deletable by anyone
+- Consistent enforcement across HTTP, NIP-96, and iroh QUIC transports
+- **Admin API** — `PUT /admin/users/:pubkey/role` (set role), `GET /admin/roles` (list by role)
+- `AccessControl` trait gains `role()` method with backward-compatible default
+
+### Unified Client & Transport Preference
+
+- **`BlobClient` trait** — transport-agnostic async interface using RPITIT (no `async_trait` dep needed)
+- **`MultiTransportClient`** — iroh for uploads/deletes (direct P2P), HTTP for downloads (CDN caching), automatic fallback on failure
+- **Full method parity** — both HTTP and iroh clients now support upload, download, exists, delete, list
+- CLI: `--iroh <endpoint>` and `--iroh-only` flags; all commands use `MultiTransportClient`
+
+### Streaming & Memory Efficiency
+
+- **`insert_stream()`** on `BlobBackend` — FilesystemBackend and S3Backend stream to storage via temp file + incremental SHA256 in 256KB chunks, never buffering full blobs in memory
+- **`upload_file()`** — two-pass streaming file upload (hash pass + send pass) on both HTTP and iroh clients
+- **`upload_batch_concurrent()`** — parallel file uploads with `Arc<C>` + `Semaphore` (default 8 concurrent streams)
+- **`sha256_stream()`** — incremental SHA256 from any `Read` impl
+- CLI: `batch-upload` command with `--concurrency` flag, `upload` command now streams (no `std::fs::read`)
+
+### Iroh Transport Parity
+
+- `AccessControl` added to `IrohState` — upload permission, quota, max size, and require_auth enforcement matching HTTP
+- `list()` added to `IrohBlossomClient`
+- `upload_file()` streams file chunks directly to QUIC `SendStream`
+
+### Build Integrity
+
+- **Deterministic source hashing** — `build.rs` on blossom-server and blossom-cli hashes all workspace source files via `git ls-files`, embeds aggregate hash via `rustc-env`
+- **`integrity.rs`** — `RuntimeIntegrityInfo` exposed on `GET /status`, signed release manifests with BIP-340 signature verification, Merkle tree attestation for zero-knowledge selective file disclosure
+- **xtask** — `sign-release-manifest`, `source-build-manifest`, `source-merkle-tree`, `verify-source-file`
+
+### Fixes
+
+- **OpenTelemetry** — add missing `tracing-subscriber` dep, update to `opentelemetry_sdk` 0.27 API
+- NIP-96 delete handler now enforces ownership checks
+- 140+ tests across workspace
+
+---
+
 ## v0.2.1
 
 ### Bug Fixes

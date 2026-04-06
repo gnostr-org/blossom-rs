@@ -208,10 +208,7 @@ async fn handle_nip96_upload(
         },
     };
 
-    (
-        StatusCode::OK,
-        Json(serde_json::to_value(response).unwrap()),
-    )
+    super::to_json_response(&response)
 }
 
 #[instrument(name = "nip96.list", skip_all, fields(auth.pubkey))]

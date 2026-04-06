@@ -53,6 +53,8 @@ cargo run -p blossom-cli -- status                    # Server status
 | `db-postgres` | no | PostgreSQL metadata backend via SQLx |
 | `media` | no | Image processing (WebP, thumbnails, blurhash, EXIF) |
 | `labels` | no | Content labeling (Vision Transformer, LLM API) |
+| `iroh-transport` | no | P2P QUIC transport via iroh (node-ID addressed) |
+| `pkarr-discovery` | no | PKARR endpoint publishing (implies iroh-transport) |
 | `otel` | no | OpenTelemetry OTLP export (Jaeger, Tempo, Seq) |
 
 ## Architecture
@@ -92,6 +94,12 @@ src/
 ├── media/
 │   ├── mod.rs          — MediaProcessor trait, PassthroughProcessor
 │   └── image_processor.rs — ImageProcessor (feature-gated)
+├── transport/
+│   ├── mod.rs          — Transport module re-exports
+│   ├── wire.rs         — Wire protocol codec (JSON-line + binary framing)
+│   ├── iroh_transport.rs — BlossomProtocol (iroh ProtocolHandler, feature-gated)
+│   ├── iroh_client.rs  — IrohBlossomClient (P2P client, feature-gated)
+│   └── pkarr_discovery.rs — PkarrPublisher, resolve (feature-gated)
 └── labels/
     └── mod.rs          — MediaLabeler trait, NoopLabeler, BlockAllLabeler
 ```

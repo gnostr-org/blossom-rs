@@ -7,15 +7,19 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use std::sync::Arc as StdArc;
+
 use blossom_rs::access::Whitelist;
 use blossom_rs::db::MemoryDatabase;
 use blossom_rs::ratelimit::{RateLimitConfig, RateLimiter};
 use blossom_rs::server::admin::admin_router;
 use blossom_rs::server::nip96::nip96_router;
 use blossom_rs::server::SharedState;
+use blossom_rs::transport::{BlossomProtocol, IrohState, BLOSSOM_ALPN};
 use blossom_rs::webhooks::HttpNotifier;
 use blossom_rs::{BlobServer, BlossomSigner, FilesystemBackend, MemoryBackend, Signer};
 use clap::Parser;
+use iroh::protocol::Router as IrohRouter;
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -108,9 +112,17 @@ struct Args {
     enable_admin: bool,
 
     /// Enable media processing on PUT /media (BUD-05).
-    /// Processes images with thumbnails, blurhash, perceptual hashing.
     #[arg(long)]
     media: bool,
+
+    /// Enable iroh P2P transport alongside HTTP.
+    #[arg(long)]
+    iroh: bool,
+
+    /// Path to iroh secret key file for stable node ID.
+    /// Generated automatically if file doesn't exist.
+    #[arg(long, default_value = "./iroh_secret.key")]
+    iroh_key_file: PathBuf,
 
     /// Log level.
     #[arg(long, default_value = "info")]
@@ -266,6 +278,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+
+    // Start iroh P2P transport if enabled.
+    let _iroh_router: Option<IrohRouter> = if args.iroh {
+        // Load or generate secret key for stable node ID.
+        let secret_key = if args.iroh_key_file.exists() {
+            let bytes =
+                std::fs::read(&args.iroh_key_file).map_err(|e| format!("read iroh key: {e}"))?;
+            let bytes: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| "iroh key file must be exactly 32 bytes")?;
+            iroh::SecretKey::from_bytes(&bytes)
+        } else {
+            let key = iroh::SecretKey::generate(&mut rand::rng());
+            std::fs::write(&args.iroh_key_file, key.to_bytes())
+                .map_err(|e| format!("write iroh key: {e}"))?;
+            info!(path = %args.iroh_key_file.display(), "generated new iroh secret key");
+            key
+        };
+
+        // Build iroh state — shares the same storage backend type but separate instance.
+        // For a production server, you'd share the backend via Arc.
+        let iroh_state = StdArc::new(tokio::sync::Mutex::new(IrohState {
+            backend: if args.memory {
+                Box::new(MemoryBackend::new())
+            } else {
+                Box::new(
+                    FilesystemBackend::new(&args.data_dir)
+                        .map_err(|e| format!("iroh backend: {e}"))?,
+                )
+            },
+            database: Box::new(MemoryDatabase::new()),
+            base_url: args.base_url.clone(),
+        }));
+
+        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+            .secret_key(secret_key)
+            .bind()
+            .await
+            .map_err(|e| format!("iroh bind: {e}"))?;
+
+        let node_id = endpoint.id();
+        info!(
+            iroh.node_id = %node_id,
+            "iroh P2P transport enabled — connect with: iroh://{}",
+            node_id,
+        );
+
+        let router = IrohRouter::builder(endpoint)
+            .accept(BLOSSOM_ALPN, StdArc::new(BlossomProtocol::new(iroh_state)))
+            .spawn();
+
+        Some(router)
+    } else {
+        None
+    };
 
     info!(bind = %args.bind, base_url = %args.base_url, "starting blossom server");
 

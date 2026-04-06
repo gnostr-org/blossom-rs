@@ -47,6 +47,7 @@ pub mod protocol;
 pub mod ratelimit;
 pub mod stats;
 pub mod storage;
+pub mod transport;
 pub mod webhooks;
 
 #[cfg(feature = "server")]

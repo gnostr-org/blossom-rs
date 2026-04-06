@@ -292,6 +292,35 @@ impl BlossomClient {
     }
 }
 
+impl crate::traits::BlobClient for BlossomClient {
+    type Address = ();
+
+    async fn upload(
+        &self,
+        _addr: &(),
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<BlobDescriptor, String> {
+        self.upload(data, content_type).await
+    }
+
+    async fn download(&self, _addr: &(), sha256: &str) -> Result<Vec<u8>, String> {
+        self.download(sha256).await
+    }
+
+    async fn exists(&self, _addr: &(), sha256: &str) -> Result<bool, String> {
+        self.exists(sha256).await
+    }
+
+    async fn delete(&self, _addr: &(), sha256: &str) -> Result<bool, String> {
+        self.delete(sha256).await
+    }
+
+    async fn list(&self, _addr: &(), pubkey: &str) -> Result<Vec<BlobDescriptor>, String> {
+        self.list(pubkey).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

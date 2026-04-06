@@ -47,6 +47,7 @@ pub mod protocol;
 pub mod ratelimit;
 pub mod stats;
 pub mod storage;
+pub mod traits;
 pub mod transport;
 pub mod webhooks;
 
@@ -64,6 +65,7 @@ pub use labels::{MediaLabeler, NoopLabeler};
 pub use media::{MediaProcessor, PassthroughProcessor};
 pub use protocol::{BlobDescriptor, NostrEvent};
 pub use storage::{BlobBackend, MemoryBackend};
+pub use traits::BlobClient;
 
 #[cfg(feature = "filesystem")]
 pub use storage::FilesystemBackend;

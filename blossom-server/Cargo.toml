@@ -10,7 +10,7 @@ keywords = ["blossom", "nostr", "server", "blob", "storage"]
 categories = ["command-line-utilities", "web-programming"]
 
 [dependencies]
-blossom-rs = { path = "..", version = "0.1.4", features = ["server", "filesystem", "db-sqlite", "media", "iroh-transport"] }
+blossom-rs = { path = "..", version = "0.1.4", features = ["server", "filesystem", "db-sqlite", "media", "iroh-transport", "pkarr-discovery"] }
 axum = "0.7"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 clap = { version = "4", features = ["derive", "env"] }

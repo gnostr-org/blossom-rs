@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use tracing::{info, instrument, warn};
 
-use super::{make_descriptor, BlobBackend};
-use crate::protocol::BlobDescriptor;
+use super::{make_descriptor, make_descriptor_from_hash, BlobBackend};
+use crate::protocol::{BlobDescriptor, STREAM_CHUNK_SIZE};
 
 /// Filesystem blob storage.
 ///
@@ -103,6 +103,69 @@ impl BlobBackend for FilesystemBackend {
     fn total_bytes(&self) -> u64 {
         self.index.values().sum()
     }
+
+    fn insert_stream(
+        &mut self,
+        reader: &mut dyn std::io::Read,
+        _size: u64,
+        base_url: &str,
+    ) -> Result<BlobDescriptor, String> {
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+
+        // Write to a temp file while computing SHA256 incrementally.
+        let tmp_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp_name = format!(".tmp_{}", tmp_id);
+        let tmp_path = self.data_dir.join(&tmp_name);
+
+        let result = (|| -> Result<BlobDescriptor, String> {
+            let mut file =
+                std::fs::File::create(&tmp_path).map_err(|e| format!("create temp: {e}"))?;
+            let mut hasher = Sha256::new();
+            let mut buf = [0u8; STREAM_CHUNK_SIZE];
+            let mut total = 0u64;
+
+            loop {
+                let n = reader
+                    .read(&mut buf)
+                    .map_err(|e| format!("read stream: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                file.write_all(&buf[..n])
+                    .map_err(|e| format!("write temp: {e}"))?;
+                total += n as u64;
+            }
+            file.flush().map_err(|e| format!("flush temp: {e}"))?;
+
+            let hash = hex::encode(hasher.finalize());
+            let final_path = self.blob_path(&hash);
+            std::fs::rename(&tmp_path, &final_path)
+                .map_err(|e| format!("rename temp to blob: {e}"))?;
+
+            self.index.insert(hash.clone(), total);
+
+            info!(
+                storage.backend = "filesystem",
+                blob.sha256 = %hash,
+                blob.size = total,
+                "blob stored via streaming insert"
+            );
+
+            Ok(make_descriptor_from_hash(&hash, total, base_url))
+        })();
+
+        // Clean up temp file on error.
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+
+        result
+    }
 }
 
 #[cfg(test)]
@@ -152,6 +215,31 @@ mod tests {
             assert_eq!(data.len(), 100);
             assert!(data.iter().all(|&b| b == 99));
         }
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_insert_stream() {
+        let tmp_dir =
+            std::env::temp_dir().join(format!("blossom_stream_{}", rand::random::<u32>()));
+        let mut store = FilesystemBackend::new(tmp_dir.to_str().unwrap()).unwrap();
+
+        let data = vec![42u8; 1_000_000]; // 1MB
+        let expected_hash = crate::protocol::sha256_hex(&data);
+
+        let mut cursor = std::io::Cursor::new(&data);
+        let desc = store
+            .insert_stream(&mut cursor, data.len() as u64, "http://test")
+            .unwrap();
+
+        assert_eq!(desc.sha256, expected_hash);
+        assert_eq!(desc.size, 1_000_000);
+
+        // Verify file on disk matches.
+        let retrieved = store.get(&desc.sha256).unwrap();
+        assert_eq!(retrieved.len(), 1_000_000);
+        assert_eq!(crate::protocol::sha256_hex(&retrieved), expected_hash);
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }

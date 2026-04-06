@@ -304,10 +304,7 @@ async fn handle_nip96_delete(
     if role != Role::Admin {
         if let Ok(record) = s.database.get_upload(&sha256) {
             if record.pubkey != "anonymous" && record.pubkey != pubkey {
-                return (
-                    StatusCode::FORBIDDEN,
-                    error_json("not the blob owner"),
-                );
+                return (StatusCode::FORBIDDEN, error_json("not the blob owner"));
             }
         }
     }

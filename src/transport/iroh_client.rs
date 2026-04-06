@@ -66,6 +66,18 @@ impl IrohBlossomClient {
     /// Upload a blob to a remote peer.
     #[instrument(name = "blossom.iroh.client.upload", skip_all, fields(blob.size = data.len()))]
     pub async fn upload(&self, addr: EndpointAddr, data: &[u8]) -> Result<BlobDescriptor, String> {
+        self.upload_with_type(addr, data, "application/octet-stream")
+            .await
+    }
+
+    /// Upload a blob with an explicit content type.
+    #[instrument(name = "blossom.iroh.client.upload", skip_all, fields(blob.size = data.len()))]
+    pub async fn upload_with_type(
+        &self,
+        addr: EndpointAddr,
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<BlobDescriptor, String> {
         let our_sha256 = sha256_hex(data);
         let auth_event =
             build_blossom_auth(self.signer.as_ref(), "upload", Some(&our_sha256), None, "");
@@ -83,7 +95,7 @@ impl IrohBlossomClient {
             sha256: String::new(),
             pubkey: String::new(),
             auth: auth_header,
-            content_type: "application/octet-stream".into(),
+            content_type: content_type.to_string(),
             body_len: data.len() as u64,
         };
         send.write_all(&wire::encode_request(&req))
@@ -269,6 +281,36 @@ impl IrohBlossomClient {
 
         info!(list.pubkey = %pubkey, "list via iroh");
         serde_json::from_slice(&data).map_err(|e| format!("parse list: {e}"))
+    }
+}
+
+impl crate::traits::BlobClient for IrohBlossomClient {
+    type Address = EndpointAddr;
+
+    async fn upload(
+        &self,
+        addr: &EndpointAddr,
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<BlobDescriptor, String> {
+        self.upload_with_type(addr.clone(), data, content_type)
+            .await
+    }
+
+    async fn download(&self, addr: &EndpointAddr, sha256: &str) -> Result<Vec<u8>, String> {
+        self.download(addr.clone(), sha256).await
+    }
+
+    async fn exists(&self, addr: &EndpointAddr, sha256: &str) -> Result<bool, String> {
+        self.exists(addr.clone(), sha256).await
+    }
+
+    async fn delete(&self, addr: &EndpointAddr, sha256: &str) -> Result<bool, String> {
+        self.delete(addr.clone(), sha256).await
+    }
+
+    async fn list(&self, addr: &EndpointAddr, pubkey: &str) -> Result<Vec<BlobDescriptor>, String> {
+        self.list(addr.clone(), pubkey).await
     }
 }
 

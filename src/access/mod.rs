@@ -232,29 +232,19 @@ impl RoleBasedAccess {
     /// Load from two files: one for admins, one for members.
     /// Each file has one pubkey per line (hex or npub1). Lines starting
     /// with `#` and blank lines are ignored.
-    pub fn from_files(
-        admin_path: &Path,
-        member_path: &Path,
-    ) -> std::io::Result<Self> {
+    pub fn from_files(admin_path: &Path, member_path: &Path) -> std::io::Result<Self> {
         let admins = Self::parse_file(admin_path)?;
         let members = Self::parse_file(member_path)?;
         Ok(Self::new(admins, members))
     }
 
     /// Reload both files.
-    pub async fn reload(
-        &self,
-        admin_path: &Path,
-        member_path: &Path,
-    ) -> std::io::Result<()> {
+    pub async fn reload(&self, admin_path: &Path, member_path: &Path) -> std::io::Result<()> {
         let new_admins = Self::parse_file(admin_path)?;
         let new_members = Self::parse_file(member_path)?;
         *self.admins.write().await = new_admins;
         *self.members.write().await = new_members;
-        tracing::info!(
-            access.backend = "role_based",
-            "role-based access reloaded"
-        );
+        tracing::info!(access.backend = "role_based", "role-based access reloaded");
         Ok(())
     }
 

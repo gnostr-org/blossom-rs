@@ -597,10 +597,7 @@ async fn handle_delete_blob(
             if role != Role::Admin {
                 if let Ok(record) = s.database.get_upload(&sha256) {
                     if record.pubkey != "anonymous" && record.pubkey != event.pubkey {
-                        return (
-                            StatusCode::FORBIDDEN,
-                            error_json("not the blob owner"),
-                        );
+                        return (StatusCode::FORBIDDEN, error_json("not the blob owner"));
                     }
                 }
             }

@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use tracing::{info, instrument, warn};
 
 use super::wire::{self, Op, Request, Response, Status};
+use crate::access::{AccessControl, Action, Role};
 use crate::auth::{verify_blossom_auth, verify_nip98_auth};
 use crate::db::{BlobDatabase, UploadRecord};
 use crate::protocol::{base64url_decode, BlobDescriptor, NostrEvent};
@@ -24,6 +25,7 @@ pub const BLOSSOM_ALPN: &[u8] = b"/blossom/1";
 pub struct IrohState {
     pub backend: Box<dyn BlobBackend>,
     pub database: Box<dyn BlobDatabase>,
+    pub access: Box<dyn AccessControl>,
     pub base_url: String,
 }
 
@@ -255,9 +257,22 @@ async fn handle_upload(
         return;
     }
 
-    let descriptor = state.backend.insert(data, &state.base_url);
-
     let pubkey = auth_pubkey.unwrap_or_else(|| "anonymous".to_string());
+
+    // Check upload permission.
+    if !state.access.is_allowed(&pubkey, Action::Upload) {
+        let resp = Response {
+            status: Status::Forbidden,
+            body_len: 0,
+            content_type: String::new(),
+            error: "upload not allowed for this pubkey".into(),
+            descriptor: None,
+        };
+        let _ = send.write_all(&wire::encode_response(&resp)).await;
+        return;
+    }
+
+    let descriptor = state.backend.insert(data, &state.base_url);
     let record = UploadRecord {
         sha256: descriptor.sha256.clone(),
         size: descriptor.size,
@@ -294,16 +309,50 @@ async fn handle_delete(
     auth_pubkey: Option<String>,
     state: &mut IrohState,
 ) {
-    if auth_pubkey.is_none() {
+    let pubkey = match auth_pubkey {
+        Some(pk) => pk,
+        None => {
+            let resp = Response {
+                status: Status::Unauthorized,
+                body_len: 0,
+                content_type: String::new(),
+                error: "auth required for delete".into(),
+                descriptor: None,
+            };
+            let _ = send.write_all(&wire::encode_response(&resp)).await;
+            return;
+        }
+    };
+
+    let role = state.access.role(&pubkey);
+    if role == Role::Denied {
         let resp = Response {
-            status: Status::Unauthorized,
+            status: Status::Forbidden,
             body_len: 0,
             content_type: String::new(),
-            error: "auth required for delete".into(),
+            error: "delete not allowed for this pubkey".into(),
             descriptor: None,
         };
         let _ = send.write_all(&wire::encode_response(&resp)).await;
         return;
+    }
+
+    // Members may only delete their own blobs. Anonymous uploads can be
+    // deleted by anyone.
+    if role != Role::Admin {
+        if let Ok(record) = state.database.get_upload(sha256) {
+            if record.pubkey != "anonymous" && record.pubkey != pubkey {
+                let resp = Response {
+                    status: Status::Forbidden,
+                    body_len: 0,
+                    content_type: String::new(),
+                    error: "not the blob owner".into(),
+                    descriptor: None,
+                };
+                let _ = send.write_all(&wire::encode_response(&resp)).await;
+                return;
+            }
+        }
     }
 
     if state.backend.delete(sha256) {

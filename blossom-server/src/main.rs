@@ -375,6 +375,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             },
             database: Box::new(MemoryDatabase::new()),
+            access: if let Some(ref wl_path) = args.whitelist {
+                let wl = Whitelist::from_file(wl_path)?;
+                Box::new(Arc::new(wl))
+            } else {
+                Box::new(blossom_rs::access::OpenAccess)
+            },
             base_url: args.base_url.clone(),
         }));
 

@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use blossom_rs::access::OpenAccess;
 use blossom_rs::auth::Signer;
 use blossom_rs::db::MemoryDatabase;
 use blossom_rs::protocol::sha256_hex;
@@ -22,6 +23,7 @@ async fn spawn_iroh_server() -> (EndpointAddr, Router) {
     let state = Arc::new(Mutex::new(IrohState {
         backend: Box::new(MemoryBackend::new()),
         database: Box::new(MemoryDatabase::new()),
+        access: Box::new(OpenAccess),
         base_url: "iroh://test".to_string(),
     }));
 

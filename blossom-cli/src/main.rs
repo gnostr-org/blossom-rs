@@ -118,6 +118,18 @@ enum AdminCommand {
         /// SHA256 hash of the blob.
         sha256: String,
     },
+    /// List whitelisted pubkeys.
+    WhitelistList,
+    /// Add a pubkey to the whitelist.
+    WhitelistAdd {
+        /// Hex-encoded public key to add.
+        pubkey: String,
+    },
+    /// Remove a pubkey from the whitelist.
+    WhitelistRemove {
+        /// Hex-encoded public key to remove.
+        pubkey: String,
+    },
 }
 
 /// Decode a secret key from hex or nsec1 bech32 format.
@@ -510,6 +522,50 @@ async fn run(args: Args) -> Result<(), String> {
                     } else {
                         let text = resp.text().await.unwrap_or_default();
                         return Err(format!("admin delete failed: {text}"));
+                    }
+                }
+                AdminCommand::WhitelistList => {
+                    let resp = http
+                        .get(format!("{}/admin/whitelist", base))
+                        .header("Authorization", &auth_header)
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("whitelist list failed: {text}"));
+                    }
+                }
+                AdminCommand::WhitelistAdd { pubkey } => {
+                    let resp = http
+                        .put(format!("{}/admin/whitelist/{}", base, pubkey))
+                        .header("Authorization", &auth_header)
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        println!("added {pubkey} to whitelist");
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("whitelist add failed: {text}"));
+                    }
+                }
+                AdminCommand::WhitelistRemove { pubkey } => {
+                    let resp = http
+                        .delete(format!("{}/admin/whitelist/{}", base, pubkey))
+                        .header("Authorization", &auth_header)
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        println!("removed {pubkey} from whitelist");
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("whitelist remove failed: {text}"));
                     }
                 }
             }

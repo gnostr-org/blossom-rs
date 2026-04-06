@@ -78,6 +78,9 @@ Options:
 | `PUT` | `/admin/users/:pubkey/quota` | Set user quota (admin auth) | Admin |
 | `GET` | `/admin/blobs` | Blob count and size (admin auth) | Admin |
 | `DELETE` | `/admin/blobs/:sha256` | Admin delete blob (admin auth) | Admin |
+| `GET` | `/admin/whitelist` | List whitelisted pubkeys (admin auth) | Admin |
+| `PUT` | `/admin/whitelist/:pubkey` | Add pubkey to whitelist (admin auth) | Admin |
+| `DELETE` | `/admin/whitelist/:pubkey` | Remove pubkey from whitelist (admin auth) | Admin |
 
 ## Features
 
@@ -109,6 +112,17 @@ RUST_LOG=blossom_rs::server=debug cargo run -p blossom-server
 
 ## Access Control
 
+### Modes
+
+| Flags | Behavior |
+|-------|----------|
+| *(none)* | Open server — anyone can upload/download |
+| `--require-auth` | Auth required for uploads, downloads are public |
+| `--require-auth --whitelist keys.txt` | Only whitelisted pubkeys can upload, downloads are public |
+| `--require-auth --whitelist keys.txt --enable-admin` | Above + admin can live-manage the whitelist via API |
+
+### Whitelist file
+
 Create a whitelist file with one hex pubkey per line:
 
 ```
@@ -121,7 +135,8 @@ d4e5f6...
 cargo run -p blossom-server -- \
   --require-auth \
   --whitelist allowed-keys.txt \
-  --whitelist-reload-secs 30
+  --whitelist-reload-secs 30 \
+  --enable-admin
 ```
 
 ## Roadmap

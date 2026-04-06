@@ -59,6 +59,8 @@ pub struct ServerState {
     backend: Box<dyn BlobBackend>,
     database: Box<dyn BlobDatabase>,
     access: Box<dyn AccessControl>,
+    /// Live whitelist handle for runtime add/remove (if whitelist is in use).
+    pub whitelist: Option<Arc<crate::access::Whitelist>>,
     stats: StatsAccumulator,
     rate_limiter: Option<RateLimiter>,
     notifier: Box<dyn WebhookNotifier>,
@@ -90,6 +92,7 @@ pub struct BlobServerBuilder {
     base_url: String,
     database: Option<Box<dyn BlobDatabase>>,
     access: Option<Box<dyn AccessControl>>,
+    whitelist: Option<Arc<crate::access::Whitelist>>,
     requirements: UploadRequirements,
     body_limit: usize,
     rate_limiter: Option<RateLimiter>,
@@ -107,6 +110,14 @@ impl BlobServerBuilder {
     /// Set an access control policy.
     pub fn access_control(mut self, ac: impl AccessControl + 'static) -> Self {
         self.access = Some(Box::new(ac));
+        self
+    }
+
+    /// Set a whitelist as the access control policy with a live handle
+    /// for runtime add/remove via admin endpoints.
+    pub fn whitelist(mut self, wl: Arc<crate::access::Whitelist>) -> Self {
+        self.access = Some(Box::new(wl.clone()));
+        self.whitelist = Some(wl);
         self
     }
 
@@ -160,6 +171,7 @@ impl BlobServerBuilder {
                 .database
                 .unwrap_or_else(|| Box::new(MemoryDatabase::new())),
             access: self.access.unwrap_or_else(|| Box::new(OpenAccess)),
+            whitelist: self.whitelist,
             stats: StatsAccumulator::new(),
             rate_limiter: self.rate_limiter,
             notifier: self.notifier.unwrap_or_else(|| Box::new(NoopNotifier)),
@@ -219,6 +231,7 @@ impl BlobServer {
             base_url: base_url.to_string(),
             database: None,
             access: None,
+            whitelist: None,
             requirements: UploadRequirements::default(),
             body_limit: 256 * 1024 * 1024, // 256 MB default
             rate_limiter: None,

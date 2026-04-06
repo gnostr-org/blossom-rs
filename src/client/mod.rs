@@ -3,8 +3,11 @@
 //! Uploads/downloads content-addressed blobs with BIP-340 Schnorr
 //! authorization and multi-server failover.
 
+pub mod batch;
+pub mod multi;
+
 use crate::auth::{auth_header_value, build_blossom_auth, BlossomSigner};
-use crate::protocol::{sha256_hex, BlobDescriptor};
+use crate::protocol::{sha256_hex, BlobDescriptor, STREAM_CHUNK_SIZE};
 use tracing::{info, instrument, warn};
 
 /// Async HTTP client for Blossom blob servers.
@@ -206,6 +209,226 @@ impl BlossomClient {
             }
         }
         Ok(false)
+    }
+
+    /// Delete a blob by SHA256 hash (requires auth).
+    ///
+    /// Returns `Ok(true)` if deleted, `Ok(false)` if not found.
+    #[instrument(name = "blossom.client.delete", skip_all, fields(blob.sha256 = %sha256))]
+    pub async fn delete(&self, sha256: &str) -> Result<bool, String> {
+        let auth_event = build_blossom_auth(self.signer.as_ref(), "delete", None, None, "");
+        let auth_header = auth_header_value(&auth_event);
+
+        for server in &self.servers {
+            let url = format!("{}/{}", server.trim_end_matches('/'), sha256);
+            let result = self
+                .http
+                .delete(&url)
+                .header("Authorization", &auth_header)
+                .send()
+                .await;
+
+            match result {
+                Ok(resp) if resp.status().is_success() => {
+                    info!(blob.sha256 = %sha256, server.url = %server, "blob deleted");
+                    return Ok(true);
+                }
+                Ok(resp) if resp.status().as_u16() == 404 => return Ok(false),
+                Ok(resp) => {
+                    warn!(
+                        server.url = %server,
+                        http.status_code = resp.status().as_u16(),
+                        "delete failed, trying next server"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    warn!(
+                        server.url = %server,
+                        error.message = %e,
+                        "delete request error, trying next server"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        Err("all Blossom servers failed for delete".into())
+    }
+
+    /// List blobs uploaded by a pubkey.
+    #[instrument(name = "blossom.client.list", skip_all, fields(list.pubkey = %pubkey))]
+    pub async fn list(&self, pubkey: &str) -> Result<Vec<BlobDescriptor>, String> {
+        for server in &self.servers {
+            let url = format!("{}/list/{}", server.trim_end_matches('/'), pubkey);
+            let result = self.http.get(&url).send().await;
+
+            match result {
+                Ok(resp) if resp.status().is_success() => {
+                    let descs: Vec<BlobDescriptor> = resp
+                        .json()
+                        .await
+                        .map_err(|e| format!("parse list response: {e}"))?;
+                    info!(list.pubkey = %pubkey, server.url = %server, "list retrieved");
+                    return Ok(descs);
+                }
+                Ok(resp) => {
+                    warn!(
+                        server.url = %server,
+                        http.status_code = resp.status().as_u16(),
+                        "list failed, trying next server"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    warn!(
+                        server.url = %server,
+                        error.message = %e,
+                        "list request error, trying next server"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        Err("all Blossom servers failed for list".into())
+    }
+
+    /// Upload a file from disk without buffering in memory.
+    ///
+    /// First pass computes SHA256 for the auth header. Second pass
+    /// streams the file to the server via reqwest.
+    #[instrument(name = "blossom.client.upload_file", skip_all, fields(
+        file.path = %path.display(),
+        blob.sha256,
+        blob.size,
+    ))]
+    pub async fn upload_file(
+        &self,
+        path: &std::path::Path,
+        content_type: &str,
+    ) -> Result<BlobDescriptor, String> {
+        // First pass: compute SHA256 by streaming the file.
+        let file_meta = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| format!("stat file: {e}"))?;
+        let file_size = file_meta.len();
+
+        let our_sha256 = tokio::task::block_in_place(|| {
+            let mut f = std::fs::File::open(path).map_err(|e| format!("open file: {e}"))?;
+            let (hash, _) =
+                crate::protocol::sha256_stream(&mut f).map_err(|e| format!("hash file: {e}"))?;
+            Ok::<_, String>(hash)
+        })?;
+
+        tracing::Span::current().record("blob.sha256", our_sha256.as_str());
+        tracing::Span::current().record("blob.size", file_size);
+
+        let auth_event =
+            build_blossom_auth(self.signer.as_ref(), "upload", Some(&our_sha256), None, "");
+        let auth_header = auth_header_value(&auth_event);
+
+        // Second pass: stream file to server.
+        for server in &self.servers {
+            let url = format!("{}/upload", server.trim_end_matches('/'));
+
+            let file = tokio::fs::File::open(path)
+                .await
+                .map_err(|e| format!("open file: {e}"))?;
+            let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_CHUNK_SIZE);
+            let body = reqwest::Body::wrap_stream(stream);
+
+            let result = self
+                .http
+                .put(&url)
+                .header("Authorization", &auth_header)
+                .header("Content-Type", content_type)
+                .header("Content-Length", file_size)
+                .body(body)
+                .send()
+                .await;
+
+            match result {
+                Ok(resp) if resp.status().is_success() => {
+                    let desc: BlobDescriptor = resp
+                        .json()
+                        .await
+                        .map_err(|e| format!("parse upload response: {e}"))?;
+                    if desc.sha256 != our_sha256 {
+                        return Err(format!(
+                            "SHA256 mismatch: server={}, ours={}",
+                            desc.sha256, our_sha256
+                        ));
+                    }
+                    info!(
+                        blob.sha256 = %desc.sha256,
+                        blob.size = desc.size,
+                        server.url = %server,
+                        "file uploaded (streaming)"
+                    );
+                    return Ok(desc);
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    warn!(
+                        server.url = %server,
+                        http.status_code = status.as_u16(),
+                        error.message = %text,
+                        "upload_file failed, trying next server"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    warn!(
+                        server.url = %server,
+                        error.message = %e,
+                        "upload_file request error, trying next server"
+                    );
+                    continue;
+                }
+            }
+        }
+
+        Err("all Blossom servers failed for upload_file".into())
+    }
+}
+
+impl crate::traits::BlobClient for BlossomClient {
+    type Address = ();
+
+    async fn upload(
+        &self,
+        _addr: &(),
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<BlobDescriptor, String> {
+        self.upload(data, content_type).await
+    }
+
+    async fn download(&self, _addr: &(), sha256: &str) -> Result<Vec<u8>, String> {
+        self.download(sha256).await
+    }
+
+    async fn exists(&self, _addr: &(), sha256: &str) -> Result<bool, String> {
+        self.exists(sha256).await
+    }
+
+    async fn delete(&self, _addr: &(), sha256: &str) -> Result<bool, String> {
+        self.delete(sha256).await
+    }
+
+    async fn list(&self, _addr: &(), pubkey: &str) -> Result<Vec<BlobDescriptor>, String> {
+        self.list(pubkey).await
+    }
+
+    async fn upload_file(
+        &self,
+        _addr: &(),
+        path: &std::path::Path,
+        content_type: &str,
+    ) -> Result<BlobDescriptor, String> {
+        self.upload_file(path, content_type).await
     }
 }
 

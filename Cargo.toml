@@ -34,6 +34,9 @@ media = ["dep:image", "dep:webp", "dep:blurhash", "dep:kamadak-exif"]
 # Content labeling
 labels = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
 
+# P2P transport via iroh QUIC
+iroh-transport = ["dep:iroh", "dep:anyhow"]
+
 # Observability — opt-in OTEL export support for consumers
 otel = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 
@@ -87,6 +90,10 @@ tracing-opentelemetry = { version = "0.28", optional = true }
 opentelemetry = { version = "0.27", optional = true }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.27", optional = true }
+
+# P2P transport (optional)
+iroh = { version = "0.97", optional = true }
+anyhow = { version = "1", optional = true }
 
 # Statistics
 dashmap = "6"

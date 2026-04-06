@@ -19,3 +19,7 @@ hex = "0.4"
 bech32 = "0.11"
 iroh = "0.97"
 pkarr = { version = "6.0.0-rc.0", default-features = false, features = ["keys"] }
+
+[dev-dependencies]
+blossom-rs = { path = "..", version = "0.1.5", features = ["server", "client", "filesystem", "iroh-transport"] }
+axum = "0.7"

@@ -320,6 +320,17 @@ fn error_json(msg: &str) -> Json<serde_json::Value> {
     Json(serde_json::json!({"error": msg}))
 }
 
+/// Serialize a value to JSON for HTTP response. Falls back to error JSON on failure.
+fn to_json_response(value: &impl serde::Serialize) -> (StatusCode, Json<serde_json::Value>) {
+    match serde_json::to_value(value) {
+        Ok(v) => (StatusCode::OK, Json(v)),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_json(&format!("serialization error: {e}")),
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BUD-01: Upload
 // ---------------------------------------------------------------------------
@@ -438,7 +449,9 @@ async fn handle_upload(
 
     (
         StatusCode::OK,
-        Json(serde_json::to_value(descriptor).unwrap()),
+        serde_json::to_value(&descriptor)
+            .map(Json)
+            .unwrap_or_else(|_| error_json("serialization error")),
     )
 }
 
@@ -543,10 +556,7 @@ async fn handle_list(
                     uploaded: Some(r.created_at),
                 })
                 .collect();
-            (
-                StatusCode::OK,
-                Json(serde_json::to_value(descriptors).unwrap()),
-            )
+            to_json_response(&descriptors)
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -687,10 +697,7 @@ async fn handle_mirror(
         Some(serde_json::json!({"source_url": req.url})),
     ));
 
-    (
-        StatusCode::OK,
-        Json(serde_json::to_value(descriptor).unwrap()),
-    )
+    to_json_response(&descriptor)
 }
 
 // ---------------------------------------------------------------------------
@@ -780,7 +787,7 @@ async fn handle_media_upload(
     ));
 
     // Build response with media metadata.
-    let mut response = serde_json::to_value(&descriptor).unwrap();
+    let mut response = serde_json::to_value(&descriptor).unwrap_or_default();
     if let Some(bh) = result.blurhash {
         response["blurhash"] = serde_json::Value::String(bh);
     }
@@ -825,7 +832,9 @@ fn detect_mime(data: &[u8]) -> String {
 #[instrument(name = "blossom.upload_requirements", skip_all)]
 async fn handle_upload_requirements(State(state): State<SharedState>) -> impl IntoResponse {
     let s = state.lock().await;
-    Json(serde_json::to_value(&s.requirements).unwrap())
+    serde_json::to_value(&s.requirements)
+        .map(Json)
+        .unwrap_or_else(|e| Json(serde_json::json!({"error": e.to_string()})))
 }
 
 // ---------------------------------------------------------------------------

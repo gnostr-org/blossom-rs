@@ -1034,6 +1034,7 @@ dependencies = [
 name = "blossom-cli"
 version = "0.1.5"
 dependencies = [
+ "axum",
  "bech32",
  "blossom-rs",
  "clap",

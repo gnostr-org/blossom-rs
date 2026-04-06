@@ -19,28 +19,29 @@ on:
 jobs:
   setup:
     runs-on: ubuntu-latest
+    permissions: {}
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - id: set-matrix
-        shell: bash
+        shell: python3 {0}
         run: |
-          ALL='{"build":["linux-x64","linux-x64-musl","windows-x64","macos-x64","macos-arm64"],"include":[{"build":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","native":true},{"build":"linux-x64-musl","os":"ubuntu-latest","target":"x86_64-unknown-linux-musl","native":true},{"build":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","native":true},{"build":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","native":true},{"build":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","native":true}]}'
-          LINUX_X64='{"build":["linux-x64"],"include":[{"build":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","native":true}]}'
-          LINUX_X64_MUSL='{"build":["linux-x64-musl"],"include":[{"build":"linux-x64-musl","os":"ubuntu-latest","target":"x86_64-unknown-linux-musl","native":true}]}'
-          WINDOWS_X64='{"build":["windows-x64"],"include":[{"build":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","native":true}]}'
-          MACOS_X64='{"build":["macos-x64"],"include":[{"build":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","native":true}]}'
-          MACOS_ARM64='{"build":["macos-arm64"],"include":[{"build":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","native":true}]}'
+          import json, os
 
-          OS="${{ inputs.os }}"
-          case "${OS:-all}" in
-            "linux-x64")      echo "matrix=$LINUX_X64"      >> "$GITHUB_OUTPUT" ;;
-            "linux-x64-musl") echo "matrix=$LINUX_X64_MUSL" >> "$GITHUB_OUTPUT" ;;
-            "windows-x64")    echo "matrix=$WINDOWS_X64"    >> "$GITHUB_OUTPUT" ;;
-            "macos-x64")      echo "matrix=$MACOS_X64"      >> "$GITHUB_OUTPUT" ;;
-            "macos-arm64")    echo "matrix=$MACOS_ARM64"    >> "$GITHUB_OUTPUT" ;;
-            *)                echo "matrix=$ALL"             >> "$GITHUB_OUTPUT" ;;
-          esac
+          ALL_TARGETS = [
+            {"build": "linux-x64",      "os": "ubuntu-latest",  "target": "x86_64-unknown-linux-gnu",   "native": True},
+            {"build": "linux-x64-musl", "os": "ubuntu-latest",  "target": "x86_64-unknown-linux-musl",  "native": True},
+            {"build": "windows-x64",    "os": "windows-latest", "target": "x86_64-pc-windows-msvc",     "native": True},
+            {"build": "macos-x64",      "os": "macos-15-intel", "target": "x86_64-apple-darwin",        "native": True},
+            {"build": "macos-arm64",    "os": "macos-latest",   "target": "aarch64-apple-darwin",       "native": True},
+          ]
+
+          selected = "${{ inputs.os }}" or "all"
+          targets = ALL_TARGETS if selected == "all" else [t for t in ALL_TARGETS if t["build"] == selected]
+          matrix = {"build": [t["build"] for t in targets], "include": targets}
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"matrix={json.dumps(matrix)}\n")
 
   build-artifacts:
     needs: setup

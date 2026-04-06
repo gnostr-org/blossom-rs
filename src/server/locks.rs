@@ -174,11 +174,11 @@ fn lock_not_configured() -> (StatusCode, Json<serde_json::Value>) {
 pub fn locks_router(state: SharedState) -> Router {
     Router::new()
         .route(
-            "/lfs/{repo_id}/locks",
+            "/lfs/:repo_id/locks",
             post(handle_create_lock).get(handle_list_locks),
         )
-        .route("/lfs/{repo_id}/locks/verify", post(handle_verify_locks))
-        .route("/lfs/{repo_id}/locks/{lock_id}/unlock", post(handle_unlock))
+        .route("/lfs/:repo_id/locks/verify", post(handle_verify_locks))
+        .route("/lfs/:repo_id/locks/:lock_id/unlock", post(handle_unlock))
         .with_state(state)
 }
 

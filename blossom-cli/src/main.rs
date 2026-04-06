@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use blossom_rs::auth::{auth_header_value, build_blossom_auth};
+use blossom_rs::transport::IrohBlossomClient;
 use blossom_rs::{BlossomClient, BlossomSigner, Signer};
 use clap::{Parser, Subcommand};
 
@@ -119,6 +120,29 @@ fn print_output(format: &OutputFormat, value: &serde_json::Value) {
     }
 }
 
+/// Check if the server URL is an iroh node address.
+fn is_iroh_server(server: &str) -> bool {
+    server.starts_with("iroh://")
+}
+
+/// Parse an iroh node ID from an `iroh://<node-id>` URL.
+fn parse_iroh_addr(server: &str) -> Result<iroh::EndpointAddr, String> {
+    let node_id_str = server.strip_prefix("iroh://").ok_or("not an iroh URL")?;
+    let public_key: iroh::PublicKey = node_id_str
+        .parse()
+        .map_err(|e| format!("invalid iroh node ID: {e}"))?;
+    Ok(iroh::EndpointAddr::from(public_key))
+}
+
+/// Create an IrohBlossomClient.
+async fn make_iroh_client(signer: Signer) -> Result<IrohBlossomClient, String> {
+    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await
+        .map_err(|e| format!("iroh bind: {e}"))?;
+    Ok(IrohBlossomClient::new(endpoint, signer))
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -148,21 +172,35 @@ async fn run(args: Args) -> Result<(), String> {
 
         Command::Upload { file } => {
             let signer = get_signer(&args.key)?;
-            let client = BlossomClient::new(vec![args.server], signer);
-
             let data = std::fs::read(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
-            let mime = mime_from_path(&file);
 
-            let desc = client.upload(&data, &mime).await?;
+            let desc = if is_iroh_server(&args.server) {
+                let addr = parse_iroh_addr(&args.server)?;
+                let client =
+                    make_iroh_client(Signer::from_secret_hex(&signer.secret_key_hex())?).await?;
+                client.upload(addr, &data).await?
+            } else {
+                let mime = mime_from_path(&file);
+                let client = BlossomClient::new(vec![args.server], signer);
+                client.upload(&data, &mime).await?
+            };
+
             print_output(&args.format, &serde_json::to_value(&desc).unwrap());
             Ok(())
         }
 
         Command::Download { sha256, output } => {
             let signer = get_signer(&args.key)?;
-            let client = BlossomClient::new(vec![args.server], signer);
 
-            let data = client.download(&sha256).await?;
+            let data = if is_iroh_server(&args.server) {
+                let addr = parse_iroh_addr(&args.server)?;
+                let client =
+                    make_iroh_client(Signer::from_secret_hex(&signer.secret_key_hex())?).await?;
+                client.download(addr, &sha256).await?
+            } else {
+                let client = BlossomClient::new(vec![args.server], signer);
+                client.download(&sha256).await?
+            };
 
             if let Some(path) = output {
                 std::fs::write(&path, &data)
@@ -179,9 +217,17 @@ async fn run(args: Args) -> Result<(), String> {
 
         Command::Exists { sha256 } => {
             let signer = get_signer(&args.key)?;
-            let client = BlossomClient::new(vec![args.server], signer);
 
-            let exists = client.exists(&sha256).await?;
+            let exists = if is_iroh_server(&args.server) {
+                let addr = parse_iroh_addr(&args.server)?;
+                let client =
+                    make_iroh_client(Signer::from_secret_hex(&signer.secret_key_hex())?).await?;
+                client.exists(addr, &sha256).await?
+            } else {
+                let client = BlossomClient::new(vec![args.server], signer);
+                client.exists(&sha256).await?
+            };
+
             if exists {
                 println!("exists");
             } else {
@@ -204,24 +250,35 @@ async fn run(args: Args) -> Result<(), String> {
             }
 
             let signer = get_signer(&args.key)?;
-            let http = reqwest::Client::new();
 
-            let auth_event = build_blossom_auth(&signer, "delete", None, None, "");
-            let auth_header = auth_header_value(&auth_event);
-
-            let url = format!("{}/{}", args.server.trim_end_matches('/'), sha256);
-            let resp = http
-                .delete(&url)
-                .header("Authorization", &auth_header)
-                .send()
-                .await
-                .map_err(|e| format!("request: {e}"))?;
-
-            if resp.status().is_success() {
-                println!("deleted {sha256}");
+            if is_iroh_server(&args.server) {
+                let addr = parse_iroh_addr(&args.server)?;
+                let client =
+                    make_iroh_client(Signer::from_secret_hex(&signer.secret_key_hex())?).await?;
+                if client.delete(addr, &sha256).await? {
+                    println!("deleted {sha256}");
+                } else {
+                    return Err("delete failed: not found".into());
+                }
             } else {
-                let text = resp.text().await.unwrap_or_default();
-                return Err(format!("delete failed: {text}"));
+                let http = reqwest::Client::new();
+                let auth_event = build_blossom_auth(&signer, "delete", None, None, "");
+                let auth_header = auth_header_value(&auth_event);
+
+                let url = format!("{}/{}", args.server.trim_end_matches('/'), sha256);
+                let resp = http
+                    .delete(&url)
+                    .header("Authorization", &auth_header)
+                    .send()
+                    .await
+                    .map_err(|e| format!("request: {e}"))?;
+
+                if resp.status().is_success() {
+                    println!("deleted {sha256}");
+                } else {
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(format!("delete failed: {text}"));
+                }
             }
             Ok(())
         }

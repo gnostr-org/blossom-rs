@@ -277,7 +277,7 @@ async fn handle_upload(
         "blob uploaded via iroh"
     );
 
-    let desc_json = serde_json::to_value(&descriptor).unwrap();
+    let desc_json = serde_json::to_value(&descriptor).unwrap_or_default();
     let resp = Response {
         status: Status::Ok,
         body_len: 0,
@@ -341,7 +341,7 @@ async fn handle_list(send: &mut iroh::endpoint::SendStream, pubkey: &str, state:
                     uploaded: Some(r.created_at),
                 })
                 .collect();
-            let body = serde_json::to_vec(&descriptors).unwrap();
+            let body = serde_json::to_vec(&descriptors).unwrap_or_default();
             let resp = Response {
                 status: Status::Ok,
                 body_len: body.len() as u64,

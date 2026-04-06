@@ -18,3 +18,7 @@ reqwest = { version = "0.12", features = ["json"] }
 hex = "0.4"
 bech32 = "0.11"
 iroh = "0.97"
+
+[dev-dependencies]
+blossom-rs = { path = "..", version = "0.1.4", features = ["server", "client", "filesystem", "iroh-transport"] }
+axum = "0.7"

@@ -11,7 +11,7 @@ on:
         options:
           - all
           - linux-x64
-          - linux-x64-musl
+          #- linux-x64-musl
           - windows-x64
           - macos-x64
           - macos-arm64

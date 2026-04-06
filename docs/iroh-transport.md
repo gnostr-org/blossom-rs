@@ -88,6 +88,7 @@ use iroh::protocol::Router;
 let state = Arc::new(Mutex::new(IrohState {
     backend: Box::new(backend),
     database: Box::new(database),
+    access: Box::new(blossom_rs::access::OpenAccess),
     base_url: "iroh://mynode".to_string(),
 }));
 

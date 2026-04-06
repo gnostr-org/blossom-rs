@@ -12,7 +12,10 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
-    name = "blossom-cli", about = "CLI client for Blossom blob storage", version)]
+    name = "blossom-cli",
+    about = "CLI client for Blossom blob storage",
+    version
+)]
 struct Args {
     /// Blossom server URL.
     #[arg(short, long, default_value = "http://localhost:3000", global = true)]

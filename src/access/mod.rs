@@ -37,13 +37,51 @@ pub enum Action {
     Admin,
 }
 
+/// Role assigned to a pubkey for authorization decisions.
+///
+/// Admins have unrestricted access including admin endpoints and the
+/// ability to delete any blob. Members can upload, download, list, and
+/// mirror, but may only delete their own blobs. Denied pubkeys have no
+/// access at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Full access — admin endpoints, delete any blob.
+    Admin,
+    /// Standard access — upload/download/list/mirror, delete own blobs only.
+    Member,
+    /// No access.
+    Denied,
+}
+
 /// Trait for pluggable access control decisions.
 ///
 /// Implementations decide whether a given pubkey is allowed to perform
 /// a given action. Return `true` to allow, `false` to deny.
+///
+/// The [`role`](AccessControl::role) method determines a pubkey's role
+/// for ownership-based authorization (e.g., only blob owners or admins
+/// can delete). The default implementation derives the role from
+/// `is_allowed` calls for backward compatibility with existing
+/// implementations.
 pub trait AccessControl: Send + Sync {
     /// Check if `pubkey` is authorized for `action`.
     fn is_allowed(&self, pubkey: &str, action: Action) -> bool;
+
+    /// Determine the role for `pubkey`.
+    ///
+    /// Override this for explicit role assignment. The default derives
+    /// the role from `is_allowed`: if `Action::Admin` is allowed the
+    /// role is `Admin`; if `Action::Upload` is allowed the role is
+    /// `Member`; otherwise `Denied`.
+    fn role(&self, pubkey: &str) -> Role {
+        if self.is_allowed(pubkey, Action::Admin) {
+            Role::Admin
+        } else if self.is_allowed(pubkey, Action::Upload) {
+            Role::Member
+        } else {
+            Role::Denied
+        }
+    }
 }
 
 /// Open access — allows everything. Default when no access control is configured.
@@ -52,6 +90,11 @@ pub struct OpenAccess;
 impl AccessControl for OpenAccess {
     fn is_allowed(&self, _pubkey: &str, _action: Action) -> bool {
         true
+    }
+
+    fn role(&self, _pubkey: &str) -> Role {
+        // Open servers grant member access, not admin.
+        Role::Member
     }
 }
 
@@ -146,11 +189,146 @@ impl AccessControl for Whitelist {
             Err(_) => false,
         }
     }
+
+    fn role(&self, pubkey: &str) -> Role {
+        if self.is_allowed(pubkey, Action::Upload) {
+            Role::Member
+        } else {
+            Role::Denied
+        }
+    }
 }
 
 impl AccessControl for Arc<Whitelist> {
     fn is_allowed(&self, pubkey: &str, action: Action) -> bool {
         (**self).is_allowed(pubkey, action)
+    }
+
+    fn role(&self, pubkey: &str) -> Role {
+        (**self).role(pubkey)
+    }
+}
+
+/// Role-based access control with explicit admin and member sets.
+///
+/// Admins have unrestricted access to all operations including admin
+/// endpoints and deleting any blob. Members can upload, download, list,
+/// mirror, and delete their own blobs. Pubkeys not in either set are
+/// denied.
+pub struct RoleBasedAccess {
+    admins: Arc<RwLock<HashSet<String>>>,
+    members: Arc<RwLock<HashSet<String>>>,
+}
+
+impl RoleBasedAccess {
+    /// Create from explicit admin and member sets (hex pubkeys).
+    pub fn new(admins: HashSet<String>, members: HashSet<String>) -> Self {
+        Self {
+            admins: Arc::new(RwLock::new(admins)),
+            members: Arc::new(RwLock::new(members)),
+        }
+    }
+
+    /// Load from two files: one for admins, one for members.
+    /// Each file has one pubkey per line (hex or npub1). Lines starting
+    /// with `#` and blank lines are ignored.
+    pub fn from_files(
+        admin_path: &Path,
+        member_path: &Path,
+    ) -> std::io::Result<Self> {
+        let admins = Self::parse_file(admin_path)?;
+        let members = Self::parse_file(member_path)?;
+        Ok(Self::new(admins, members))
+    }
+
+    /// Reload both files.
+    pub async fn reload(
+        &self,
+        admin_path: &Path,
+        member_path: &Path,
+    ) -> std::io::Result<()> {
+        let new_admins = Self::parse_file(admin_path)?;
+        let new_members = Self::parse_file(member_path)?;
+        *self.admins.write().await = new_admins;
+        *self.members.write().await = new_members;
+        tracing::info!(
+            access.backend = "role_based",
+            "role-based access reloaded"
+        );
+        Ok(())
+    }
+
+    /// Add a pubkey as admin at runtime. Accepts hex or npub1.
+    pub async fn add_admin(&self, pubkey: &str) {
+        let normalized = normalize_pubkey(pubkey).unwrap_or_else(|| pubkey.to_string());
+        self.admins.write().await.insert(normalized);
+    }
+
+    /// Add a pubkey as member at runtime. Accepts hex or npub1.
+    pub async fn add_member(&self, pubkey: &str) {
+        let normalized = normalize_pubkey(pubkey).unwrap_or_else(|| pubkey.to_string());
+        self.members.write().await.insert(normalized);
+    }
+
+    /// Remove a pubkey from both admin and member sets.
+    pub async fn remove(&self, pubkey: &str) {
+        let normalized = normalize_pubkey(pubkey).unwrap_or_else(|| pubkey.to_string());
+        self.admins.write().await.remove(&normalized);
+        self.members.write().await.remove(&normalized);
+    }
+
+    /// List all admin pubkeys.
+    pub async fn list_admins(&self) -> Vec<String> {
+        self.admins.read().await.iter().cloned().collect()
+    }
+
+    /// List all member pubkeys.
+    pub async fn list_members(&self) -> Vec<String> {
+        self.members.read().await.iter().cloned().collect()
+    }
+
+    fn parse_file(path: &Path) -> std::io::Result<HashSet<String>> {
+        let content = std::fs::read_to_string(path)?;
+        Ok(content
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .filter_map(normalize_pubkey)
+            .collect())
+    }
+}
+
+impl AccessControl for RoleBasedAccess {
+    fn is_allowed(&self, pubkey: &str, action: Action) -> bool {
+        match self.role(pubkey) {
+            Role::Admin => true,
+            Role::Member => !matches!(action, Action::Admin),
+            Role::Denied => false,
+        }
+    }
+
+    fn role(&self, pubkey: &str) -> Role {
+        if let Ok(admins) = self.admins.try_read() {
+            if admins.contains(pubkey) {
+                return Role::Admin;
+            }
+        }
+        if let Ok(members) = self.members.try_read() {
+            if members.contains(pubkey) {
+                return Role::Member;
+            }
+        }
+        Role::Denied
+    }
+}
+
+impl AccessControl for Arc<RoleBasedAccess> {
+    fn is_allowed(&self, pubkey: &str, action: Action) -> bool {
+        (**self).is_allowed(pubkey, action)
+    }
+
+    fn role(&self, pubkey: &str) -> Role {
+        (**self).role(pubkey)
     }
 }
 
@@ -291,5 +469,99 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert!(list.contains(&"a".repeat(64)));
         assert!(list.contains(&"b".repeat(64)));
+    }
+
+    // --- Role tests ---
+
+    #[test]
+    fn test_open_access_role_is_member() {
+        let ac = OpenAccess;
+        assert_eq!(ac.role("anything"), Role::Member);
+    }
+
+    #[test]
+    fn test_whitelist_role_is_member() {
+        let pk = "a".repeat(64);
+        let mut keys = HashSet::new();
+        keys.insert(pk.clone());
+        let wl = Whitelist::new(keys);
+
+        assert_eq!(wl.role(&pk), Role::Member);
+        assert_eq!(wl.role(&"b".repeat(64)), Role::Denied);
+    }
+
+    #[test]
+    fn test_role_based_access_admin() {
+        let admin = "a".repeat(64);
+        let member = "b".repeat(64);
+        let nobody = "c".repeat(64);
+
+        let mut admins = HashSet::new();
+        admins.insert(admin.clone());
+        let mut members = HashSet::new();
+        members.insert(member.clone());
+
+        let rba = RoleBasedAccess::new(admins, members);
+
+        // Admin can do everything.
+        assert_eq!(rba.role(&admin), Role::Admin);
+        assert!(rba.is_allowed(&admin, Action::Admin));
+        assert!(rba.is_allowed(&admin, Action::Upload));
+        assert!(rba.is_allowed(&admin, Action::Delete));
+
+        // Member can do most things but not admin.
+        assert_eq!(rba.role(&member), Role::Member);
+        assert!(rba.is_allowed(&member, Action::Upload));
+        assert!(rba.is_allowed(&member, Action::Delete));
+        assert!(rba.is_allowed(&member, Action::Download));
+        assert!(rba.is_allowed(&member, Action::List));
+        assert!(rba.is_allowed(&member, Action::Mirror));
+        assert!(!rba.is_allowed(&member, Action::Admin));
+
+        // Nobody is denied.
+        assert_eq!(rba.role(&nobody), Role::Denied);
+        assert!(!rba.is_allowed(&nobody, Action::Upload));
+        assert!(!rba.is_allowed(&nobody, Action::Admin));
+    }
+
+    #[tokio::test]
+    async fn test_role_based_access_add_remove() {
+        let rba = RoleBasedAccess::new(HashSet::new(), HashSet::new());
+        let pk = "d".repeat(64);
+
+        assert_eq!(rba.role(&pk), Role::Denied);
+
+        rba.add_member(&pk).await;
+        assert_eq!(rba.role(&pk), Role::Member);
+
+        rba.add_admin(&pk).await;
+        assert_eq!(rba.role(&pk), Role::Admin);
+
+        rba.remove(&pk).await;
+        assert_eq!(rba.role(&pk), Role::Denied);
+    }
+
+    #[test]
+    fn test_role_based_access_from_files() {
+        let dir = std::env::temp_dir().join(format!("blossom_rba_{}", rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let admin_file = dir.join("admins.txt");
+        let member_file = dir.join("members.txt");
+
+        std::fs::write(&admin_file, format!("{}\n", "a".repeat(64))).unwrap();
+        std::fs::write(
+            &member_file,
+            format!("{}\n{}\n", "b".repeat(64), "c".repeat(64)),
+        )
+        .unwrap();
+
+        let rba = RoleBasedAccess::from_files(&admin_file, &member_file).unwrap();
+        assert_eq!(rba.role(&"a".repeat(64)), Role::Admin);
+        assert_eq!(rba.role(&"b".repeat(64)), Role::Member);
+        assert_eq!(rba.role(&"c".repeat(64)), Role::Member);
+        assert_eq!(rba.role(&"d".repeat(64)), Role::Denied);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

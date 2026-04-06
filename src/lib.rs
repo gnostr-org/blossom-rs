@@ -57,7 +57,7 @@ pub mod server;
 pub mod client;
 
 // Re-exports for convenience.
-pub use access::AccessControl;
+pub use access::{AccessControl, Role, RoleBasedAccess};
 pub use auth::{BlossomSigner, Signer};
 pub use db::{BlobDatabase, MemoryDatabase};
 pub use labels::{MediaLabeler, NoopLabeler};

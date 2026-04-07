@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use std::sync::Arc as StdArc;
 
-use blossom_rs::access::Whitelist;
+use blossom_rs::access::{normalize_pubkey, RoleBasedAccess, Whitelist};
 use blossom_rs::db::MemoryDatabase;
 use blossom_rs::ratelimit::{RateLimitConfig, RateLimiter};
 use blossom_rs::server::admin::admin_router;
@@ -25,7 +25,11 @@ use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
-#[command(name = "blossom-server", about = "Blossom blob storage API server")]
+#[command(
+    name = "blossom-server",
+    about = "Blossom blob storage API server",
+    version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("BLOSSOM_GIT_HASH"))
+)]
 struct Args {
     /// Listen address.
     #[arg(short, long, default_value = "0.0.0.0:3000")]
@@ -129,9 +133,14 @@ struct Args {
     #[arg(long, value_delimiter = ',')]
     cors_origins: Vec<String>,
 
-    /// Enable admin endpoints (requires --whitelist for access control).
+    /// Enable admin endpoints.
     #[arg(long)]
     enable_admin: bool,
+
+    /// Bootstrap admin pubkey (hex or npub1). Persisted in the database.
+    /// Can be specified multiple times.
+    #[arg(long = "admin", value_delimiter = ',')]
+    admin_pubkeys: Vec<String>,
 
     /// Enable media processing on PUT /media (BUD-05).
     #[arg(long)]
@@ -212,20 +221,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build metadata database.
-    if args.memory {
-        builder = builder.database(MemoryDatabase::new());
+    let mut database: Box<dyn blossom_rs::db::BlobDatabase> = if args.memory {
+        Box::new(MemoryDatabase::new())
     } else if let Some(ref pg_url) = args.db_postgres {
         let db = blossom_rs::db::PostgresDatabase::new(pg_url)
             .await
             .map_err(|e| format!("Postgres: {e}"))?;
         info!(db = "postgres", "using PostgreSQL metadata database");
-        builder = builder.database(db);
+        Box::new(db)
     } else {
         let db_url = format!("sqlite:{}?mode=rwc", args.db_path);
         let db = blossom_rs::db::SqliteDatabase::new(&db_url).await?;
         info!(db_path = %args.db_path, "using SQLite metadata database");
-        builder = builder.database(db);
+        Box::new(db)
     };
+
+    // Bootstrap admin pubkeys from --admin flag.
+    for admin_pk in &args.admin_pubkeys {
+        let normalized = normalize_pubkey(admin_pk)
+            .ok_or_else(|| format!("invalid admin pubkey: {admin_pk}"))?;
+        database
+            .set_role(&normalized, "admin")
+            .map_err(|e| format!("set admin role: {e}"))?;
+        info!(pubkey = %normalized, "bootstrapped admin role");
+    }
+
+    // Load roles from database into in-memory access control.
+    let role_access = Arc::new(RoleBasedAccess::load_from_database(database.as_mut()).await);
+    builder = builder.role_based_access(role_access.clone());
+    builder = builder.database_boxed(database);
 
     if args.require_auth {
         builder = builder.require_auth();
@@ -271,13 +295,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("media processing enabled (PUT /media)");
     }
 
-    // Whitelist setup.
-    let whitelist: Option<Arc<Whitelist>> = if let Some(ref wl_path) = args.whitelist {
-        let wl = Whitelist::from_file(wl_path)?;
-        info!(path = %wl_path.display(), "loaded pubkey whitelist");
-        let wl = Arc::new(wl);
-        builder = builder.whitelist(wl.clone());
-        Some(wl)
+    // Whitelist setup (only if no --admin flags set role-based access).
+    let whitelist: Option<Arc<Whitelist>> = if args.admin_pubkeys.is_empty() {
+        if let Some(ref wl_path) = args.whitelist {
+            let wl = Whitelist::from_file(wl_path)?;
+            info!(path = %wl_path.display(), "loaded pubkey whitelist");
+            let wl = Arc::new(wl);
+            builder = builder.whitelist(wl.clone());
+            Some(wl)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -371,7 +399,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             },
             database: Box::new(MemoryDatabase::new()),
+            access: if let Some(ref wl_path) = args.whitelist {
+                let wl = Whitelist::from_file(wl_path)?;
+                Box::new(Arc::new(wl))
+            } else {
+                Box::new(blossom_rs::access::OpenAccess)
+            },
             base_url: args.base_url.clone(),
+            max_upload_size: args.max_upload_size,
+            require_auth: args.require_auth,
         }));
 
         let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)

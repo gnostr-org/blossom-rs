@@ -11,7 +11,11 @@ use blossom_rs::{BlossomClient, BlossomSigner, Signer};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "blossom-cli", about = "CLI client for Blossom blob storage")]
+#[command(
+    name = "blossom-cli",
+    about = "CLI client for Blossom blob storage",
+    version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("BLOSSOM_GIT_HASH"))
+)]
 struct Args {
     /// Blossom server URL.
     #[arg(short, long, default_value = "http://localhost:3000", global = true)]

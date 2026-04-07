@@ -57,6 +57,29 @@ fn main() {
         "cargo:rustc-env=BLOSSOM_SOURCE_BUILD_MANIFEST_PATH={}",
         manifest_path.display()
     );
+
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/index");
+    println!("cargo:rerun-if-env-changed=BUILD_GIT_COMMIT_ID");
+    println!(
+        "cargo:rustc-env=BLOSSOM_GIT_HASH={}",
+        git_short_hash(&workspace_root)
+    );
+}
+
+fn git_short_hash(workspace_root: &Path) -> String {
+    if let Ok(commit) = std::env::var("BUILD_GIT_COMMIT_ID") {
+        return commit.chars().take(7).collect();
+    }
+    Command::new("git")
+        .args(["rev-parse", "--short=7", "--verify", "HEAD"])
+        .current_dir(workspace_root)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn discover_source_files(workspace_root: &Path) -> io::Result<Vec<PathBuf>> {

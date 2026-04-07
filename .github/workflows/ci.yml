@@ -7,6 +7,16 @@ on:
     branches: [master]
   workflow_call:
   workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - ci-trusted
+          - ci-pr
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,7 +24,9 @@ env:
 jobs:
   # Trusted CI — runs on self-hosted runner for pushes to master.
   ci-trusted:
-    if: github.event_name == 'push'
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-trusted'))
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +42,10 @@ jobs:
 
   # PR CI — runs on GitHub-hosted runners across OS matrix for pull requests.
   ci-pr:
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    if: |
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]

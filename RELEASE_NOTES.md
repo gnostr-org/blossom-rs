@@ -1,5 +1,57 @@
 # Release Notes
 
+## v0.4.0
+
+### Breaking Changes
+
+- `BlobBackend` trait gains `insert_with_hash()` method for storing data under a pre-computed SHA-256 (required for BUD-20 compressed storage)
+- `BlobServer::builder()` now accepts `lock_database()` and `lfs_version_database()` builder methods
+- `ServerState` has new fields: `lock_db`, `lfs_version_db`
+- V4 SQLite migration adds `lfs_file_versions` table
+- New public modules: `locks`, `lfs`
+- New public types: `LockDatabase`, `LockError`, `LockFilters`, `LockRecord`, `MemoryLockDatabase`, `LfsContext`, `LfsFileVersion`, `LfsStorageType`, `LfsStorageStats`, `LfsVersionDatabase`, `MemoryLfsVersionDatabase`
+- `build_blossom_auth_with_extra_tags()` added to `auth` module for arbitrary extra tags in auth events
+- `BlossomClient::upload_lfs()` method added with LFS context tags (path, repo, base, manifest)
+
+### BUD-17: Chunked Storage
+
+- `docs/BUD-17.md` — Spec for BUD-07 chunked blob storage with Merkle tree manifests
+- Foundation for efficient storage of large files via chunking + manifest upload
+
+### BUD-19: LFS File Locking
+
+- **`locks` module** — `LockDatabase` trait, `LockError`, `LockFilters`, `LockRecord`, `MemoryLockDatabase` implementation
+- **Lock HTTP endpoints** — `POST/GET /lfs/{repo_id}/locks`, `POST /lfs/{repo_id}/locks/verify`, `POST /lfs/{repo_id}/locks/{id}/unlock`
+- **Admin force unlock** — Admin role holders can unlock any lock (server sets `force=true` implicitly)
+- **Ownership enforcement** — Only the lock owner can unlock (unless admin or force)
+- **iroh transport** — Wire protocol lock operations + iroh client lock methods
+- **Integration tests** — 13 HTTP lock tests, 6 iroh lock tests
+
+### BUD-20: LFS-Aware Storage Efficiency
+
+- **`docs/BUD-20.md`** — Full spec covering auth tags, storage pipeline, download reconstruction, database schema
+- **`lfs` module** — `LfsContext` (tag parsing from auth events), `LfsVersionDatabase` trait, `MemoryLfsVersionDatabase`, `LfsFileVersion`, `LfsStorageType`, `LfsStorageStats`
+- **`lfs/compress`** — zstd compress/decompress (level 3), xdelta3 encode/decode, delta threshold check (80%)
+- **Storage pipeline**:
+  - No LFS tags → raw storage (unchanged)
+  - LFS + manifest → raw storage
+  - LFS + no base → zstd compress → store
+  - LFS + base tag → xdelta3 delta → if delta < 80% of original, store delta; else fall back to compressed
+- **Transparent download** — GET/HEAD reconstruct original bytes via decompression and delta chain walking (max depth 10)
+- **DELETE handler** — Rebases dependent deltas into full compressed blobs before deleting base
+- **SQLite V4 migration** — `lfs_file_versions` table with `LfsVersionDatabase` impl
+- **Client `upload_lfs()`** — Upload with LFS context tags (path, repo, base, manifest)
+- **Integration tests** — 6 LFS storage tests (compressed upload/download, delta round-trip, non-LFS unchanged, manifest raw, HEAD original size, version tracking)
+
+### Fixes
+
+- iroh client download used `Op::Head` instead of `Op::Get`
+- iroh tests run serially to avoid FD exhaustion
+- Clippy clean across full workspace (`cargo clippy --workspace --all-targets -- -D warnings`)
+- 184+ tests passing
+
+---
+
 ## v0.3.0
 
 ### Breaking Changes

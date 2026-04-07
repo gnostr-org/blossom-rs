@@ -1,7 +1,7 @@
 //! Integration tests for BUD-20: LFS-aware storage efficiency.
 
 use blossom_rs::auth::{auth_header_value, build_blossom_auth, Signer};
-use blossom_rs::lfs::{LfsContext, LfsVersionDatabase};
+use blossom_rs::lfs::LfsContext;
 use blossom_rs::server::BlobServer;
 use blossom_rs::storage::MemoryBackend;
 use blossom_rs::{BlossomSigner, MemoryDatabase, MemoryLfsVersionDatabase};

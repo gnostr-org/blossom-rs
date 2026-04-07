@@ -87,8 +87,8 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
       - run: cargo build --workspace --all-targets
-      - run: cargo run -p blossom-cli -- -V
-      - run: cargo run -p blossom-server -- -V
+      - run: cargo run -p blossom-cli -- | -V
+      - run: cargo run -p blossom-server -- | -V
       - name: Resolve build targets
         id: targets
         shell: bash

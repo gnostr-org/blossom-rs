@@ -85,6 +85,7 @@ pub trait LockDatabase: Send + Sync {
 }
 
 /// In-memory lock database for testing.
+#[derive(Clone)]
 pub struct MemoryLockDatabase {
     locks: HashMap<String, LockRecord>,
 }

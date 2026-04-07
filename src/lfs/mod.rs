@@ -209,6 +209,7 @@ pub struct LfsStorageTypeStats {
 }
 
 /// In-memory LFS version database (for testing).
+#[derive(Clone)]
 pub struct MemoryLfsVersionDatabase {
     versions: Vec<LfsFileVersion>,
 }

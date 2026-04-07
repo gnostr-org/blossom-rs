@@ -6,7 +6,7 @@ use blossom_rs::{
     auth::{auth_header_value, build_blossom_auth},
     protocol::sha256_hex,
     server::BlobServer,
-    BlobBackend, BlobDatabase, BlossomClient, MemoryBackend, MemoryDatabase, Signer,
+    BlobDatabase, BlossomClient, MemoryBackend, MemoryDatabase, Signer,
 };
 
 async fn spawn_server(server: BlobServer) -> String {

@@ -41,7 +41,7 @@ async fn spawn_iroh_server() -> (EndpointAddr, Router) {
     let addr = endpoint.addr();
 
     let router = Router::builder(endpoint)
-        .accept(BLOSSOM_ALPN.to_vec(), Arc::new(BlossomProtocol::new(state)))
+        .accept(BLOSSOM_ALPN, Arc::new(BlossomProtocol::new(state)))
         .spawn();
 
     // Give the router a moment to start accepting.
@@ -203,7 +203,7 @@ async fn spawn_iroh_lock_server() -> (EndpointAddr, Router) {
     let addr = endpoint.addr();
 
     let router = Router::builder(endpoint)
-        .accept(BLOSSOM_ALPN.to_vec(), Arc::new(BlossomProtocol::new(state)))
+        .accept(BLOSSOM_ALPN, Arc::new(BlossomProtocol::new(state)))
         .spawn();
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

@@ -1032,7 +1032,7 @@ dependencies = [
 
 [[package]]
 name = "blossom-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "bech32",
@@ -1043,12 +1043,13 @@ dependencies = [
  "pkarr 6.0.0-rc.0",
  "reqwest 0.12.28",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
 ]
 
 [[package]]
 name = "blossom-rs"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -1080,24 +1081,28 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tower-http 0.5.2",
  "tracing",
  "tracing-opentelemetry",
+ "tracing-subscriber",
  "webp",
 ]
 
 [[package]]
 name = "blossom-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "axum-server",
  "blossom-rs",
  "clap",
+ "hex",
  "iroh",
  "rand 0.9.2",
  "reqwest 0.12.28",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tower-http 0.5.2",
@@ -7814,6 +7819,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
 dependencies = [
  "xml-rs",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "blossom-rs",
+ "serde_json",
 ]
 
 [[package]]

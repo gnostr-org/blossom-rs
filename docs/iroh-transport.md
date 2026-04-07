@@ -88,7 +88,10 @@ use iroh::protocol::Router;
 let state = Arc::new(Mutex::new(IrohState {
     backend: Box::new(backend),
     database: Box::new(database),
+    access: Box::new(blossom_rs::access::OpenAccess),
     base_url: "iroh://mynode".to_string(),
+    max_upload_size: None,
+    require_auth: false,
 }));
 
 // Bind iroh endpoint with persistent secret key

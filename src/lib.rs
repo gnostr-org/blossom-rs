@@ -40,6 +40,7 @@
 pub mod access;
 pub mod auth;
 pub mod db;
+pub mod integrity;
 pub mod labels;
 pub mod media;
 pub mod otel;
@@ -47,6 +48,7 @@ pub mod protocol;
 pub mod ratelimit;
 pub mod stats;
 pub mod storage;
+pub mod traits;
 pub mod transport;
 pub mod webhooks;
 
@@ -57,13 +59,14 @@ pub mod server;
 pub mod client;
 
 // Re-exports for convenience.
-pub use access::AccessControl;
+pub use access::{AccessControl, Role, RoleBasedAccess};
 pub use auth::{BlossomSigner, Signer};
 pub use db::{BlobDatabase, MemoryDatabase};
 pub use labels::{MediaLabeler, NoopLabeler};
 pub use media::{MediaProcessor, PassthroughProcessor};
 pub use protocol::{BlobDescriptor, NostrEvent};
 pub use storage::{BlobBackend, MemoryBackend};
+pub use traits::BlobClient;
 
 #[cfg(feature = "filesystem")]
 pub use storage::FilesystemBackend;
@@ -74,6 +77,10 @@ pub use storage::{S3Backend, S3Config};
 #[cfg(feature = "server")]
 pub use server::BlobServer;
 
+#[cfg(feature = "client")]
+pub use client::batch::{upload_batch, upload_batch_concurrent, DEFAULT_MAX_CONCURRENT};
+#[cfg(feature = "client")]
+pub use client::multi::{MultiTransportClient, Transport};
 #[cfg(feature = "client")]
 pub use client::BlossomClient;
 

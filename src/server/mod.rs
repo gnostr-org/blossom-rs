@@ -473,7 +473,7 @@ fn reconstruct_blob(
                 v.base_sha256.clone()
             }
         })
-        .ok_or_else(|| "no base in chain")?;
+        .ok_or("no base in chain")?;
 
     let mut result = backend
         .get(&base_hash)
@@ -594,69 +594,72 @@ async fn handle_upload(
         .unwrap_or_default();
 
     // BUD-20: LFS compression/delta pipeline.
-    let (stored_data, storage_type, base_sha256) = if lfs_ctx.is_lfs
-        && s.lfs_version_db.is_some()
-        && !lfs_ctx.is_manifest
-    {
-        if let Some(ref base_hash) = lfs_ctx.base {
-            let (base_version, base_data) = {
-                let lfs_db = s.lfs_version_db.as_ref().unwrap();
-                let bv = lfs_db.get_by_sha256(base_hash).ok().flatten();
-                let bd = s.backend.get(base_hash);
-                (bv, bd)
-            };
-
-            if let (Some(base_version), Some(base_data)) = (base_version, base_data) {
-                let base_decompressed = match base_version.storage {
-                    LfsStorageType::Compressed => {
-                        compress::decompress(&base_data).unwrap_or_else(|_| base_data.clone())
-                    }
-                    LfsStorageType::Delta => {
-                        let lfs_db = s.lfs_version_db.as_ref().unwrap();
-                        reconstruct_blob(&base_data, &base_version, lfs_db.as_ref(), &*s.backend)
-                            .unwrap_or_else(|_| base_data.clone())
-                    }
-                    _ => base_data.clone(),
+    let (stored_data, storage_type, base_sha256) = if let Some(ref lfs_db) = s.lfs_version_db {
+        if lfs_ctx.is_lfs && !lfs_ctx.is_manifest {
+            if let Some(ref base_hash) = lfs_ctx.base {
+                let (base_version, base_data) = {
+                    let bv = lfs_db.get_by_sha256(base_hash).ok().flatten();
+                    let bd = s.backend.get(base_hash);
+                    (bv, bd)
                 };
 
-                match compress::encode_delta(&base_decompressed, &data) {
-                    Ok(delta) if compress::delta_is_worthwhile(delta.len(), data.len()) => {
-                        match compress::compress(&delta) {
-                            Ok(compressed_delta) => {
-                                info!(
-                                    blob.sha256 = %original_sha256,
-                                    lfs.storage = "delta",
-                                    lfs.base = %base_hash,
-                                    lfs.delta_bytes = delta.len(),
-                                    lfs.compressed_bytes = compressed_delta.len(),
-                                    lfs.original_bytes = original_size,
-                                    "LFS delta stored"
-                                );
-                                (
-                                    compressed_delta,
-                                    LfsStorageType::Delta,
-                                    Some(base_hash.clone()),
-                                )
-                            }
-                            Err(_) => {
-                                let compressed =
-                                    compress::compress(&data).unwrap_or_else(|_| data.clone());
-                                (compressed, LfsStorageType::Compressed, None)
+                if let (Some(base_version), Some(base_data)) = (base_version, base_data) {
+                    let base_decompressed = match base_version.storage {
+                        LfsStorageType::Compressed => {
+                            compress::decompress(&base_data).unwrap_or_else(|_| base_data.clone())
+                        }
+                        LfsStorageType::Delta => reconstruct_blob(
+                            &base_data,
+                            &base_version,
+                            lfs_db.as_ref(),
+                            &*s.backend,
+                        )
+                        .unwrap_or_else(|_| base_data.clone()),
+                        _ => base_data.clone(),
+                    };
+
+                    match compress::encode_delta(&base_decompressed, &data) {
+                        Ok(delta) if compress::delta_is_worthwhile(delta.len(), data.len()) => {
+                            match compress::compress(&delta) {
+                                Ok(compressed_delta) => {
+                                    info!(
+                                        blob.sha256 = %original_sha256,
+                                        lfs.storage = "delta",
+                                        lfs.base = %base_hash,
+                                        lfs.delta_bytes = delta.len(),
+                                        lfs.compressed_bytes = compressed_delta.len(),
+                                        lfs.original_bytes = original_size,
+                                        "LFS delta stored"
+                                    );
+                                    (
+                                        compressed_delta,
+                                        LfsStorageType::Delta,
+                                        Some(base_hash.clone()),
+                                    )
+                                }
+                                Err(_) => {
+                                    let compressed =
+                                        compress::compress(&data).unwrap_or_else(|_| data.clone());
+                                    (compressed, LfsStorageType::Compressed, None)
+                                }
                             }
                         }
+                        _ => {
+                            let compressed =
+                                compress::compress(&data).unwrap_or_else(|_| data.clone());
+                            (compressed, LfsStorageType::Compressed, None)
+                        }
                     }
-                    _ => {
-                        let compressed = compress::compress(&data).unwrap_or_else(|_| data.clone());
-                        (compressed, LfsStorageType::Compressed, None)
-                    }
+                } else {
+                    let compressed = compress::compress(&data).unwrap_or_else(|_| data.clone());
+                    (compressed, LfsStorageType::Compressed, None)
                 }
             } else {
                 let compressed = compress::compress(&data).unwrap_or_else(|_| data.clone());
                 (compressed, LfsStorageType::Compressed, None)
             }
         } else {
-            let compressed = compress::compress(&data).unwrap_or_else(|_| data.clone());
-            (compressed, LfsStorageType::Compressed, None)
+            (data.clone(), LfsStorageType::Raw, None)
         }
     } else {
         (data.clone(), LfsStorageType::Raw, None)
@@ -674,37 +677,38 @@ async fn handle_upload(
     };
 
     // Record LFS version if applicable.
-    if lfs_ctx.is_lfs && s.lfs_version_db.is_some() {
-        if let (Some(repo), Some(path)) = (&lfs_ctx.repo, &lfs_ctx.path) {
-            let lfs_db = s.lfs_version_db.as_mut().unwrap();
-            let next_version = lfs_db
-                .get_latest_version(repo, path)
-                .ok()
-                .flatten()
-                .map(|v| v.version + 1)
-                .unwrap_or(1);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
+    if let Some(ref mut lfs_db) = s.lfs_version_db {
+        if lfs_ctx.is_lfs {
+            if let (Some(repo), Some(path)) = (&lfs_ctx.repo, &lfs_ctx.path) {
+                let next_version = lfs_db
+                    .get_latest_version(repo, path)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.version + 1)
+                    .unwrap_or(1);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
 
-            let record = LfsFileVersion {
-                repo_id: repo.clone(),
-                path: path.clone(),
-                version: next_version,
-                sha256: original_sha256.clone(),
-                base_sha256: base_sha256.clone(),
-                storage: storage_type.clone(),
-                delta_algo: if storage_type == LfsStorageType::Delta {
-                    Some("xdelta3".into())
-                } else {
-                    None
-                },
-                original_size: original_size as i64,
-                stored_size: descriptor.size as i64,
-                created_at: now,
-            };
-            let _ = lfs_db.record_version(&record);
+                let record = LfsFileVersion {
+                    repo_id: repo.clone(),
+                    path: path.clone(),
+                    version: next_version,
+                    sha256: original_sha256.clone(),
+                    base_sha256: base_sha256.clone(),
+                    storage: storage_type.clone(),
+                    delta_algo: if storage_type == LfsStorageType::Delta {
+                        Some("xdelta3".into())
+                    } else {
+                        None
+                    },
+                    original_size: original_size as i64,
+                    stored_size: descriptor.size as i64,
+                    created_at: now,
+                };
+                let _ = lfs_db.record_version(&record);
+            }
         }
     }
 

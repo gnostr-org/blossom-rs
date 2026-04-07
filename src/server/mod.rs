@@ -864,6 +864,55 @@ async fn handle_delete_blob(
             }
             if s.backend.delete(&sha256) {
                 let _ = s.database.delete_upload(&sha256);
+
+                let base_url_clone = s.base_url.clone();
+                let deltas_to_rebase = s
+                    .lfs_version_db
+                    .as_ref()
+                    .and_then(|lfs_db| lfs_db.get_deltas_for_base(&sha256).ok());
+
+                if let Some(deltas) = deltas_to_rebase {
+                    for delta_version in deltas {
+                        let base_decompressed_opt = {
+                            let lfs_db = s.lfs_version_db.as_ref().unwrap();
+                            s.backend
+                                .get(&delta_version.sha256)
+                                .and_then(|_delta_data| {
+                                    reconstruct_blob(
+                                        &[],
+                                        &delta_version,
+                                        lfs_db.as_ref(),
+                                        &*s.backend,
+                                    )
+                                    .ok()
+                                })
+                        };
+
+                        if let Some(base_decompressed) = base_decompressed_opt {
+                            let compressed = compress::compress(&base_decompressed)
+                                .unwrap_or_else(|_| base_decompressed.clone());
+                            s.backend.insert_with_hash(
+                                compressed,
+                                &delta_version.sha256,
+                                delta_version.original_size as u64,
+                                &base_url_clone,
+                            );
+                            if let Some(ref mut lfs_db) = s.lfs_version_db {
+                                let _ = lfs_db.update_version(
+                                    &delta_version.sha256,
+                                    LfsStorageType::Compressed,
+                                    None,
+                                    base_decompressed.len() as i64,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if let Some(ref mut lfs_db) = s.lfs_version_db {
+                    let _ = lfs_db.delete_by_sha256(&sha256);
+                }
+
                 s.notifier.notify(webhooks::make_payload(
                     EventType::Delete,
                     &sha256,

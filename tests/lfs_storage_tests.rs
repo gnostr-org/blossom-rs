@@ -354,3 +354,231 @@ async fn test_lfs_head_returns_original_size() {
         .unwrap();
     assert_eq!(content_length, 10_000);
 }
+
+#[tokio::test]
+async fn test_lfs_delete_rebases_delta() {
+    let server = lfs_server();
+    let url = spawn(server).await;
+    let signer = Signer::generate();
+    let http = reqwest::Client::new();
+
+    let v1_data = vec![0x42u8; 10_000];
+    let v1_sha = blossom_rs::protocol::sha256_hex(&v1_data);
+
+    let ctx_v1 = LfsContext {
+        is_lfs: true,
+        path: Some("model.bin".into()),
+        repo: Some("github.com/org/repo".into()),
+        ..Default::default()
+    };
+    let auth_v1 = lfs_upload_auth(&signer, &v1_sha, &ctx_v1);
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", auth_v1)
+        .header("Content-Type", "application/octet-stream")
+        .body(v1_data.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let mut v2_data = v1_data.clone();
+    v2_data[5000] = 0xFF;
+    let v2_sha = blossom_rs::protocol::sha256_hex(&v2_data);
+
+    let ctx_v2 = LfsContext {
+        is_lfs: true,
+        path: Some("model.bin".into()),
+        repo: Some("github.com/org/repo".into()),
+        base: Some(v1_sha.clone()),
+        ..Default::default()
+    };
+    let auth_v2 = lfs_upload_auth(&signer, &v2_sha, &ctx_v2);
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", auth_v2)
+        .header("Content-Type", "application/octet-stream")
+        .body(v2_data.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let get_auth = build_blossom_auth(&signer, "get", None, None, "");
+    let resp = http
+        .get(format!("{}/{}", url, v2_sha))
+        .header("Authorization", auth_header_value(&get_auth))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &v2_data[..], "v2 mismatch before delete");
+
+    let delete_auth = build_blossom_auth(&signer, "delete", Some(&v1_sha), None, "");
+    let resp = http
+        .delete(format!("{}/{}", url, v1_sha))
+        .header("Authorization", auth_header_value(&delete_auth))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let get_auth = build_blossom_auth(&signer, "get", None, None, "");
+    let resp = http
+        .get(format!("{}/{}", url, v2_sha))
+        .header("Authorization", auth_header_value(&get_auth))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &v2_data[..], "v2 mismatch after delete");
+}
+
+#[tokio::test]
+async fn test_lfs_delta_chain_max_depth() {
+    let server = lfs_server();
+    let url = spawn(server).await;
+    let signer = Signer::generate();
+    let http = reqwest::Client::new();
+
+    let mut prev_data: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
+    let prev_sha = blossom_rs::protocol::sha256_hex(&prev_data);
+
+    let ctx_v1 = LfsContext {
+        is_lfs: true,
+        path: Some("model.bin".into()),
+        repo: Some("github.com/org/repo".into()),
+        ..Default::default()
+    };
+    let auth_v1 = lfs_upload_auth(&signer, &prev_sha, &ctx_v1);
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", auth_v1)
+        .header("Content-Type", "application/octet-stream")
+        .body(prev_data.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let mut prev_sha = prev_sha;
+
+    for i in 2..=11u8 {
+        let mut new_data = prev_data.clone();
+        new_data[i as usize * 100] = 0xFF;
+        let new_sha = blossom_rs::protocol::sha256_hex(&new_data);
+
+        let ctx = LfsContext {
+            is_lfs: true,
+            path: Some("model.bin".into()),
+            repo: Some("github.com/org/repo".into()),
+            base: Some(prev_sha.clone()),
+            ..Default::default()
+        };
+        let auth = lfs_upload_auth(&signer, &new_sha, &ctx);
+        let resp = http
+            .put(format!("{}/upload", url))
+            .header("Authorization", auth)
+            .header("Content-Type", "application/octet-stream")
+            .body(new_data.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "upload v{} failed", i);
+
+        prev_data = new_data;
+        prev_sha = new_sha;
+    }
+
+    let get_auth = build_blossom_auth(&signer, "get", None, None, "");
+    let resp = http
+        .get(format!("{}/{}", url, prev_sha))
+        .header("Authorization", auth_header_value(&get_auth))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(&body[..], &prev_data[..], "v11 content mismatch");
+}
+
+#[tokio::test]
+async fn test_auth_expired_event_rejected() {
+    let server = lfs_server();
+    let url = spawn(server).await;
+    let signer = Signer::generate();
+    let http = reqwest::Client::new();
+
+    let data = vec![42u8; 1000];
+    let sha256 = blossom_rs::protocol::sha256_hex(&data);
+
+    let pubkey = signer.public_key_hex();
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expiration = created_at - 30;
+    let tags = vec![
+        vec!["t".into(), "upload".into()],
+        vec!["x".into(), sha256.clone()],
+        vec!["expiration".into(), expiration.to_string()],
+    ];
+    let id_bytes = blossom_rs::protocol::compute_event_id(&pubkey, created_at, 24242, &tags, "");
+    let id = hex::encode(id_bytes);
+    let sig = signer.sign_schnorr(&id_bytes);
+    let expired_event = blossom_rs::NostrEvent {
+        id,
+        pubkey,
+        created_at,
+        kind: 24242,
+        tags,
+        content: String::new(),
+        sig,
+    };
+
+    let expired_auth = auth_header_value(&expired_event);
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", expired_auth)
+        .header("Content-Type", "application/octet-stream")
+        .body(data.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "expired auth should be rejected");
+
+    let valid_auth = build_blossom_auth(&signer, "upload", Some(&sha256), None, "");
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", auth_header_value(&valid_auth))
+        .header("Content-Type", "application/octet-stream")
+        .body(data)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "valid auth should succeed");
+}
+
+#[tokio::test]
+async fn test_auth_wrong_action_rejected() {
+    let server = lfs_server();
+    let url = spawn(server).await;
+    let signer = Signer::generate();
+    let http = reqwest::Client::new();
+
+    let data = vec![42u8; 1000];
+    let sha256 = blossom_rs::protocol::sha256_hex(&data);
+
+    let wrong_auth = build_blossom_auth(&signer, "get", Some(&sha256), None, "");
+    let resp = http
+        .put(format!("{}/upload", url))
+        .header("Authorization", auth_header_value(&wrong_auth))
+        .header("Content-Type", "application/octet-stream")
+        .body(data)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "wrong action should be rejected");
+}

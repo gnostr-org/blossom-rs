@@ -9,6 +9,19 @@ use crate::lfs::{
     LfsFileVersion, LfsStorageStats, LfsStorageType, LfsVersionDatabase, LfsVersionError,
 };
 
+type VersionRow = (
+    String,
+    String,
+    i64,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+);
+
 /// SQLite-backed metadata database.
 ///
 /// Uses SQLx for async queries, but implements `BlobDatabase` synchronously
@@ -561,7 +574,7 @@ impl LfsVersionDatabase for SqliteDatabase {
 
     fn get_by_sha256(&self, sha256: &str) -> Result<Option<LfsFileVersion>, LfsVersionError> {
         Self::block_on(async {
-            let row: Option<(String, String, i64, String, Option<String>, String, Option<String>, i64, i64, i64)> =
+            let row: Option<VersionRow> =
                 sqlx::query_as(
                     "SELECT repo_id, path, version, sha256, base_sha256, storage, delta_algo, original_size, stored_size, created_at
                      FROM lfs_file_versions WHERE sha256 = ?",
@@ -571,7 +584,7 @@ impl LfsVersionDatabase for SqliteDatabase {
                 .await
                 .map_err(|e| LfsVersionError::Internal(format!("get by sha256: {e}")))?;
 
-            Ok(row.map(|r| row_to_version(r)))
+            Ok(row.map(row_to_version))
         })
     }
 
@@ -581,7 +594,7 @@ impl LfsVersionDatabase for SqliteDatabase {
         path: &str,
     ) -> Result<Option<LfsFileVersion>, LfsVersionError> {
         Self::block_on(async {
-            let row: Option<(String, String, i64, String, Option<String>, String, Option<String>, i64, i64, i64)> =
+            let row: Option<VersionRow> =
                 sqlx::query_as(
                     "SELECT repo_id, path, version, sha256, base_sha256, storage, delta_algo, original_size, stored_size, created_at
                      FROM lfs_file_versions WHERE repo_id = ? AND path = ? ORDER BY version DESC LIMIT 1",
@@ -592,7 +605,7 @@ impl LfsVersionDatabase for SqliteDatabase {
                 .await
                 .map_err(|e| LfsVersionError::Internal(format!("get latest: {e}")))?;
 
-            Ok(row.map(|r| row_to_version(r)))
+            Ok(row.map(row_to_version))
         })
     }
 
@@ -612,7 +625,7 @@ impl LfsVersionDatabase for SqliteDatabase {
         base_sha256: &str,
     ) -> Result<Vec<LfsFileVersion>, LfsVersionError> {
         Self::block_on(async {
-            let rows: Vec<(String, String, i64, String, Option<String>, String, Option<String>, i64, i64, i64)> =
+            let rows: Vec<VersionRow> =
                 sqlx::query_as(
                     "SELECT repo_id, path, version, sha256, base_sha256, storage, delta_algo, original_size, stored_size, created_at
                      FROM lfs_file_versions WHERE base_sha256 = ? AND storage = 'delta'",
@@ -622,7 +635,7 @@ impl LfsVersionDatabase for SqliteDatabase {
                 .await
                 .map_err(|e| LfsVersionError::Internal(format!("get deltas: {e}")))?;
 
-            Ok(rows.into_iter().map(|r| row_to_version(r)).collect())
+            Ok(rows.into_iter().map(row_to_version).collect())
         })
     }
 
@@ -688,20 +701,7 @@ impl LfsVersionDatabase for SqliteDatabase {
     }
 }
 
-fn row_to_version(
-    r: (
-        String,
-        String,
-        i64,
-        String,
-        Option<String>,
-        String,
-        Option<String>,
-        i64,
-        i64,
-        i64,
-    ),
-) -> LfsFileVersion {
+fn row_to_version(r: VersionRow) -> LfsFileVersion {
     LfsFileVersion {
         repo_id: r.0,
         path: r.1,

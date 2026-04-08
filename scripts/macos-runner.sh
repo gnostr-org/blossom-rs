@@ -188,10 +188,10 @@ cmd_install() {
         info "Downloading runner archive..."
         # Download to parent dir when repo-scoped so sibling repos can reuse it
         if [[ -n "$REPO" ]]; then
-            curl -fsSL "$URL" -o "$PARENT_ARCHIVE"
+            curl -#fL "$URL" -o "$PARENT_ARCHIVE"
             cp "$PARENT_ARCHIVE" "$ARCHIVE"
         else
-            curl -fsSL "$URL" -o "$ARCHIVE"
+            curl -#fL "$URL" -o "$ARCHIVE"
         fi
     fi
     tar xzf "$ARCHIVE" -C "$RUNNER_DIR"

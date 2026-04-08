@@ -107,12 +107,29 @@ jobs:
       - run: cargo test --features iroh-transport --test iroh_integration
       - run: cargo clippy --workspace -- -D warnings
 
-  ci-pr-macos-intel:
+  # Ping job: times out after 5 min if macos-15-intel runner is unavailable.
+  # timeout-minutes counts from job creation (includes queue time).
+  ci-pr-macos-intel-ping:
     if: |
       github.event_name == 'pull_request' ||
       (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
       github.event_name == 'workflow_call' ||
       (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    runs-on: macos-15-intel
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - run: echo "macos-15-intel runner available"
+
+  ci-pr-macos-intel:
+    needs: ci-pr-macos-intel-ping
+    if: |
+      needs.ci-pr-macos-intel-ping.result == 'success' && (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+        github.event_name == 'workflow_call' ||
+        (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+      )
     runs-on: macos-15-intel
     timeout-minutes: 20
     continue-on-error: true

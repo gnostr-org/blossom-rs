@@ -6,14 +6,18 @@ Utility scripts for development, CI, and infrastructure.
 
 ## macos-runner.sh
 
-Install and manage a GitHub Actions self-hosted runner on macOS (x86_64/Intel).
-Registers against an organization or a single repository with the
-`macos-15-intel` label, and installs it as a **launchd service** so it
-survives reboots.
+Install and manage a GitHub Actions self-hosted runner on macOS.
+**Auto-detects architecture at runtime** — no flags needed to distinguish
+Intel vs Apple Silicon. Installs as a **launchd service** so it survives reboots.
+
+| Arch | Default labels | Runner binary |
+|------|---------------|---------------|
+| x86_64 (Intel) | `self-hosted,macOS,X64,macos-15-intel` | `osx-x64` |
+| arm64 (Apple Silicon) | `self-hosted,macOS,ARM64,macos-latest` | `osx-arm64` |
 
 ### Prerequisites
 
-- macOS on x86_64 (Intel)
+- macOS (Intel or Apple Silicon)
 - [`gh`](https://cli.github.com/) authenticated with org or repo admin rights
 - `curl`, `python3` (both ship with macOS)
 
@@ -22,8 +26,7 @@ survives reboots.
 ## linux-runner.sh
 
 Install and manage a GitHub Actions self-hosted runner on Linux (x86_64).
-Registers against an organization or a single repository with the
-`self-hosted,Linux,X64` labels, and installs it as a **systemd service**.
+Registers with labels `self-hosted,Linux,X64` and installs as a **systemd service**.
 
 ### Prerequisites
 
@@ -49,9 +52,9 @@ Registers against an organization or a single repository with the
 |-------------|----------------------------------------------------------|
 | `install`   | Download, configure, and start the runner *(default)*    |
 | `remove`    | Deregister runner from GitHub (keeps files on disk)      |
-| `start`     | Start the launchd service                                |
-| `stop`      | Stop the launchd service                                 |
-| `status`    | Show launchd service status                              |
+| `start`     | Start the service                                        |
+| `stop`      | Stop the service                                         |
+| `status`    | Show service status                                      |
 | `uninstall` | Stop service, deregister from GitHub, delete runner dir  |
 
 **Options**
@@ -60,22 +63,35 @@ Registers against an organization or a single repository with the
 |------|---------|-------------|
 | `--org <org>` | `MonumentalSystems` | GitHub organization |
 | `--repo <repo>` | *(none — org-scoped)* | Scope to a single repo; dir becomes `~/actions-runner/<repo>` |
-| `--name <name>` | `<hostname>-intel` | Runner display name |
-| `--labels <labels>` | `self-hosted,macOS,X64,macos-15-intel` | Comma-separated runner labels |
+| `--name <name>` | `<hostname>-intel` or `<hostname>-arm` | Runner display name (auto-set by arch on macOS) |
+| `--labels <labels>` | *(auto by arch on macOS)* | Comma-separated runner labels |
 | `--dir <path>` | `~/actions-runner` or `~/actions-runner/<repo>` | Runner install directory |
 | `--group <group>` | `Default` | Runner group |
 | `--remove` | — | Remove existing config before installing (reconfigure) |
 
+### Tar caching
+
+When `--repo` is used, runner tarballs are cached in the **parent directory**
+(`~/actions-runner/runner.tar.gz`) and copied into the repo-scoped dir, so
+sibling repos skip the download entirely.
+
+To upgrade the cached version, delete the parent tar and re-run:
+
+```bash
+rm ~/actions-runner/runner.tar.gz
+./scripts/macos-runner.sh --repo blossom-rs install
+```
+
 ### Examples
 
 ```bash
-# macOS — org-scoped runner for MonumentalSystems (default)
+# macOS — auto-detects Intel or ARM, registers accordingly
 ./scripts/macos-runner.sh install
 
-# Linux — org-scoped runner for MonumentalSystems (default)
+# Linux
 ./scripts/linux-runner.sh install
 
-# Org-scoped runner for a different org
+# Different org
 ./scripts/macos-runner.sh --org gnostr-org install
 ./scripts/linux-runner.sh --org gnostr-org install
 
@@ -83,36 +99,34 @@ Registers against an organization or a single repository with the
 ./scripts/macos-runner.sh --org gnostr-org --repo blossom-rs install
 ./scripts/linux-runner.sh --org gnostr-org --repo blossom-rs install
 
-# Multiple repo-scoped runners on the same machine
-./scripts/macos-runner.sh --org gnostr-org --repo blossom-rs   install
-./scripts/macos-runner.sh --org gnostr-org --repo other-repo   install
+# Multiple repo-scoped runners on the same machine (tar downloaded once)
+./scripts/macos-runner.sh --org gnostr-org --repo blossom-rs install
+./scripts/macos-runner.sh --org gnostr-org --repo other-repo  install
 
-# Reconfigure an existing runner (removes old registration first)
+# Reconfigure an existing runner
 ./scripts/macos-runner.sh --remove install
 ./scripts/linux-runner.sh --remove install
 
-# Custom name and labels
-./scripts/macos-runner.sh --name my-mac   --labels "self-hosted,macOS,X64,macos-15-intel" install
-./scripts/linux-runner.sh --name my-linux --labels "self-hosted,Linux,X64,ubuntu-24" install
+# Custom labels
+./scripts/macos-runner.sh --labels "self-hosted,macOS,ARM64,macos-latest" install
+./scripts/linux-runner.sh --labels "self-hosted,Linux,X64,ubuntu-24" install
 
-# Check status
-./scripts/macos-runner.sh --org gnostr-org status
-./scripts/linux-runner.sh --org gnostr-org status
-
-# Fully remove
+# Status / teardown
+./scripts/macos-runner.sh status
 ./scripts/macos-runner.sh uninstall
-./scripts/linux-runner.sh uninstall
 ```
 
 ### Runner directory layout
 
 ```
-~/actions-runner/             ← org-scoped runner
-~/actions-runner/<repo>/      ← repo-scoped runner (one per repo)
-    config.sh
-    run.sh
-    svc.sh
-    _work/                    ← job working directory
+~/actions-runner/
+    runner.tar.gz             ← cached archive (org-scoped, or shared by --repo installs)
+    config.sh                 ← org-scoped runner config
+    _work/
+    <repo>/                   ← repo-scoped runner (one per repo)
+        runner.tar.gz         ← copy of parent archive
+        config.sh
+        _work/
 ```
 
 ### Service manager

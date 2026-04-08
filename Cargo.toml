@@ -69,7 +69,7 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 
 # Server (optional)
-axum = { version = "0.7", features = ["ws"], optional = true }
+axum = { version = "0.8", features = ["ws"], optional = true }
 axum-extra = { version = "0.9", optional = true }
 tower-http = { version = "0.5", features = ["cors", "limit", "trace"], optional = true }
 

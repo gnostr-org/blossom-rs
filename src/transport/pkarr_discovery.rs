@@ -28,6 +28,8 @@ pub struct PkarrConfig {
     pub http_url: Option<String>,
     /// Iroh node ID string (published as `_iroh` TXT).
     pub iroh_node_id: Option<String>,
+    /// Nostr relay WebSocket URL (published as `_nostr` TXT).
+    pub nostr_relay_url: Option<String>,
     /// Republish interval. Records expire after ~2h; default 60 min.
     pub republish_interval: Duration,
     /// TTL for DNS records in seconds.
@@ -39,6 +41,7 @@ impl Default for PkarrConfig {
         Self {
             http_url: None,
             iroh_node_id: None,
+            nostr_relay_url: None,
             republish_interval: Duration::from_secs(3600),
             ttl: 3600,
         }
@@ -94,6 +97,15 @@ impl PkarrPublisher {
             builder = builder.txt(name, txt, self.config.ttl);
         }
 
+        if let Some(ref relay_url) = self.config.nostr_relay_url {
+            let name = Name::new("_nostr").map_err(|e| format!("dns name: {e}"))?;
+            let txt: TXT = relay_url
+                .as_str()
+                .try_into()
+                .map_err(|e| format!("txt: {e}"))?;
+            builder = builder.txt(name, txt, self.config.ttl);
+        }
+
         builder
             .build(&self.keypair)
             .map_err(|e| format!("sign packet: {e}"))
@@ -133,26 +145,40 @@ impl PkarrPublisher {
     }
 }
 
+/// Resolved PKARR endpoints.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedEndpoints {
+    pub http_url: Option<String>,
+    pub iroh_node_id: Option<String>,
+    pub nostr_relay_url: Option<String>,
+}
+
 /// Resolve blossom endpoints for a pkarr public key.
 ///
 /// Returns `(http_url, iroh_node_id)` if found.
 pub async fn resolve_blossom_endpoints(
     public_key: &pkarr::PublicKey,
 ) -> Result<(Option<String>, Option<String>), String> {
+    let resolved = resolve_all_endpoints(public_key).await?;
+    Ok((resolved.http_url, resolved.iroh_node_id))
+}
+
+/// Resolve all PKARR endpoints including Nostr relay.
+pub async fn resolve_all_endpoints(
+    public_key: &pkarr::PublicKey,
+) -> Result<ResolvedEndpoints, String> {
     let client = Client::builder().build().expect("pkarr client");
     let packet = client
         .resolve(public_key)
         .await
         .ok_or("no pkarr record found")?;
 
-    let mut http_url = None;
-    let mut iroh_node_id = None;
+    let mut endpoints = ResolvedEndpoints::default();
 
     for record in packet.resource_records("_blossom") {
         if let RData::TXT(txt) = &record.rdata {
-            // Convert TXT to String.
             if let Ok(s) = String::try_from(txt.clone()) {
-                http_url = Some(s);
+                endpoints.http_url = Some(s);
             }
         }
     }
@@ -160,12 +186,20 @@ pub async fn resolve_blossom_endpoints(
     for record in packet.resource_records("_iroh") {
         if let RData::TXT(txt) = &record.rdata {
             if let Ok(s) = String::try_from(txt.clone()) {
-                iroh_node_id = Some(s);
+                endpoints.iroh_node_id = Some(s);
             }
         }
     }
 
-    Ok((http_url, iroh_node_id))
+    for record in packet.resource_records("_nostr") {
+        if let RData::TXT(txt) = &record.rdata {
+            if let Ok(s) = String::try_from(txt.clone()) {
+                endpoints.nostr_relay_url = Some(s);
+            }
+        }
+    }
+
+    Ok(endpoints)
 }
 
 #[cfg(test)]

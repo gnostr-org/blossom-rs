@@ -308,12 +308,12 @@ impl BlobServer {
         let mut router = Router::new()
             .route("/upload", put(handle_upload))
             .route(
-                "/:sha256",
+                "/{sha256}",
                 get(handle_get_blob)
                     .head(handle_head_blob)
                     .delete(handle_delete_blob),
             )
-            .route("/list/:pubkey", get(handle_list))
+            .route("/list/{pubkey}", get(handle_list))
             .route("/mirror", put(handle_mirror))
             .route("/media", put(handle_media_upload))
             .route("/upload-requirements", get(handle_upload_requirements))
@@ -1235,7 +1235,7 @@ async fn handle_health() -> StatusCode {
 pub fn build_s3_compat_router(state: SharedState) -> Router {
     Router::new()
         .route(
-            "/:bucket/*key",
+            "/{bucket}/{*key}",
             put(s3_put).get(s3_get).head(s3_head).delete(s3_delete),
         )
         .with_state(state)

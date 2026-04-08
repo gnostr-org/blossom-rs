@@ -27,4 +27,4 @@ serde_json = "1.0"
 
 [dev-dependencies]
 blossom-rs = { path = "..", version = "0.4.2", features = ["server", "client", "filesystem", "iroh-transport"] }
-axum = "0.7"
+axum = "0.8"

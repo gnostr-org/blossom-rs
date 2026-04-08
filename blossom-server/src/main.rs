@@ -492,6 +492,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PkarrConfig {
                     http_url: Some(args.base_url.clone()),
                     iroh_node_id: Some(node_id.to_string()),
+                    #[cfg(feature = "nip34")]
+                    nostr_relay_url: if args.nip34 {
+                        Some(format!("wss://{}", args.nip34_domain))
+                    } else {
+                        None
+                    },
+                    #[cfg(not(feature = "nip34"))]
+                    nostr_relay_url: None,
                     republish_interval: std::time::Duration::from_secs(args.pkarr_republish_secs),
                     ttl: 3600,
                 },

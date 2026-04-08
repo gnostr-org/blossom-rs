@@ -53,11 +53,15 @@ impl WebhookNotifier for NoopNotifier {
 ///
 /// Delivery is async and fire-and-forget. Failed deliveries are logged
 /// via `tracing::warn` but never retried.
+///
+/// Requires the `client` feature.
+#[cfg(feature = "client")]
 pub struct HttpNotifier {
     urls: Vec<String>,
     client: reqwest::Client,
 }
 
+#[cfg(feature = "client")]
 impl HttpNotifier {
     /// Create a notifier that posts to the given webhook URLs.
     pub fn new(urls: Vec<String>) -> Self {
@@ -69,6 +73,7 @@ impl HttpNotifier {
     }
 }
 
+#[cfg(feature = "client")]
 impl WebhookNotifier for HttpNotifier {
     fn notify(&self, payload: WebhookPayload) {
         for url in &self.urls {

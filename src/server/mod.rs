@@ -60,19 +60,27 @@ pub struct UploadRequirements {
 
 /// Internal server state.
 pub struct ServerState {
-    backend: Box<dyn BlobBackend>,
-    database: Box<dyn BlobDatabase>,
-    access: Box<dyn AccessControl>,
+    pub(crate) backend: Box<dyn BlobBackend>,
+    pub(crate) database: Box<dyn BlobDatabase>,
+    pub(crate) access: Box<dyn AccessControl>,
     /// Live whitelist handle for runtime add/remove (if whitelist is in use).
     pub whitelist: Option<Arc<crate::access::Whitelist>>,
-    stats: StatsAccumulator,
-    rate_limiter: Option<RateLimiter>,
-    notifier: Box<dyn WebhookNotifier>,
-    media_processor: Option<Box<dyn MediaProcessor>>,
-    base_url: String,
-    requirements: UploadRequirements,
+    pub(crate) stats: StatsAccumulator,
+    pub(crate) rate_limiter: Option<RateLimiter>,
+    pub(crate) notifier: Box<dyn WebhookNotifier>,
+    pub(crate) media_processor: Option<Box<dyn MediaProcessor>>,
+    pub(crate) base_url: String,
+    pub(crate) requirements: UploadRequirements,
     pub lock_db: Option<Box<dyn LockDatabase>>,
     pub lfs_version_db: Option<Box<dyn LfsVersionDatabase>>,
+}
+
+impl std::fmt::Debug for ServerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerState")
+            .field("base_url", &self.base_url)
+            .finish()
+    }
 }
 
 impl ServerState {
@@ -345,6 +353,44 @@ impl BlobServer {
                         },
                     ),
             )
+    }
+
+    /// Spawn an iroh P2P transport sharing this server's state.
+    ///
+    /// Returns the iroh endpoint address and the iroh router handle.
+    /// Both HTTP and iroh transports share the same backend, database,
+    /// lock DB, and LFS version DB.
+    #[cfg(feature = "iroh-transport")]
+    pub async fn spawn_iroh(
+        &self,
+    ) -> Result<
+        (iroh::EndpointAddr, iroh::protocol::Router),
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        use crate::transport::{BlossomProtocol, BLOSSOM_ALPN};
+        use std::sync::Arc;
+
+        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+            .bind()
+            .await
+            .map_err(|e| format!("iroh bind: {e}"))?;
+
+        let addr = endpoint.addr();
+
+        let router = iroh::protocol::Router::builder(endpoint)
+            .accept(
+                BLOSSOM_ALPN,
+                Arc::new(BlossomProtocol::new(self.state.clone())),
+            )
+            .spawn();
+
+        tracing::info!(
+            iroh.node_id = %addr.id,
+            "iroh P2P transport spawned — connect with: iroh://{}",
+            addr.id,
+        );
+
+        Ok((addr, router))
     }
 }
 

@@ -74,8 +74,23 @@ jobs:
       - run: cargo test --features iroh-transport --test iroh_integration
       - run: cargo clippy --workspace -- -D warnings
 
+  # Ping job: times out after 5 min if macos-15-intel runner is unavailable.
+  # timeout-minutes counts from job creation (includes queue time).
+  ci-pr-ubuntu-latest-ping:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - run: echo "ubuntu-latest runner available"
+
   # PR CI — runs on GitHub-hosted runners across OS matrix for pull requests.
   ci-pr:
+    needs: ci-pr-ubuntu-latest-ping
     if: |
       github.event_name == 'pull_request' ||
       (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
@@ -111,20 +126,6 @@ jobs:
       - run: cargo test --workspace
       - run: cargo test --features iroh-transport --test iroh_integration
       - run: cargo clippy --workspace -- -D warnings
-
-  # Ping job: times out after 5 min if macos-15-intel runner is unavailable.
-  # timeout-minutes counts from job creation (includes queue time).
-  ci-pr-macos-intel-ping:
-    if: |
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
-      github.event_name == 'workflow_call' ||
-      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
-    runs-on: macos-15-intel
-    timeout-minutes: 5
-    continue-on-error: true
-    steps:
-      - run: echo "macos-15-intel runner available"
 
   ci-pr-macos-intel:
     needs: ci-pr-macos-intel-ping
@@ -190,7 +191,7 @@ jobs:
       - run: cargo test --features iroh-transport --test iroh_integration
       - run: cargo clippy --workspace -- -D warnings
 
-  # Ping job: times out after 5 min if ubuntu-latest runner is unavailable.
+  # Ping job: times out after 5 min if macos-15-intel runner is unavailable.
   # timeout-minutes counts from job creation (includes queue time).
   ci-pr-ubuntu-latest-ping:
     if: |
@@ -198,7 +199,7 @@ jobs:
       (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
       github.event_name == 'workflow_call' ||
       (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
-    runs-on: macos-15-intel
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true
     steps:

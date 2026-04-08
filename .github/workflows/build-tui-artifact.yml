@@ -60,10 +60,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
         with:
-          fetch-depth: 50
+          fetch-depth: '50'
       - name: Build blossom-tui artifact
         uses: ./.github/actions/build-blossom-binary
         with:

@@ -1,0 +1,25 @@
+name: Publish Crate
+description: Publish a crate to crates.io, with an optional pre-publish delay.
+
+inputs:
+  package:
+    description: 'Crate name to publish (e.g. blossom-rs)'
+    required: true
+  token:
+    description: 'crates.io API token'
+    required: true
+  delay:
+    description: 'Seconds to sleep before publishing (allows index propagation)'
+    required: false
+    default: '0'
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for crates.io index
+      if: inputs.delay != '0'
+      shell: bash
+      run: sleep ${{ inputs.delay }}
+    - name: Publish
+      shell: bash
+      run: cargo publish -p ${{ inputs.package }} --allow-dirty --token ${{ inputs.token }}

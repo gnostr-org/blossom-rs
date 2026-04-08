@@ -42,6 +42,7 @@ pub mod auth;
 pub mod db;
 pub mod integrity;
 pub mod labels;
+#[cfg(feature = "lfs")]
 pub mod lfs;
 pub mod locks;
 pub mod media;
@@ -68,6 +69,7 @@ pub use auth::{
 };
 pub use db::{BlobDatabase, MemoryDatabase};
 pub use labels::{MediaLabeler, NoopLabeler};
+#[cfg(feature = "lfs")]
 pub use lfs::{
     compress, LfsContext, LfsFileVersion, LfsStorageStats, LfsStorageType, LfsVersionDatabase,
     LfsVersionError, MemoryLfsVersionDatabase,

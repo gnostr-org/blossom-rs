@@ -10,7 +10,7 @@
 //!
 //! # Usage
 //! ```text
-//! cargo run --bin blossom-tui --features tui -- [OPTIONS]
+//! cargo run -p blossom-tui -- [OPTIONS]
 //!
 //! OPTIONS:
 //!   -s, --server <URL>   Blossom server URL [default: http://localhost:3000]
@@ -44,20 +44,20 @@ use tokio::sync::mpsc;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const APP_TITLE: &str = "blossom-tui";
-const TAB_NAMES: &[&str] = &[" Blobs ", " Upload ", " Status ", " Keygen "];
+pub const APP_TITLE: &str = "blossom-tui";
+pub const TAB_NAMES: &[&str] = &[" Blobs ", " Upload ", " Status ", " Keygen "];
 
-const COLOR_ACCENT: Color = Color::Cyan;
-const COLOR_OK: Color = Color::Green;
-const COLOR_ERR: Color = Color::Red;
-const COLOR_DIM: Color = Color::DarkGray;
-const COLOR_SELECTED_BG: Color = Color::Blue;
-const COLOR_TITLE_BG: Color = Color::DarkGray;
+pub const COLOR_ACCENT: Color = Color::Cyan;
+pub const COLOR_OK: Color = Color::Green;
+pub const COLOR_ERR: Color = Color::Red;
+pub const COLOR_DIM: Color = Color::DarkGray;
+pub const COLOR_SELECTED_BG: Color = Color::Blue;
+pub const COLOR_TITLE_BG: Color = Color::DarkGray;
 
 // ── Async messages ────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-enum AppMsg {
+pub enum AppMsg {
     BlobsLoaded(Vec<BlobDescriptor>),
     BlobsError(String),
     UploadDone(BlobDescriptor),
@@ -70,52 +70,52 @@ enum AppMsg {
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
-struct KeygenResult {
-    hex_secret: String,
-    nsec: String,
-    pubkey: String,
+pub struct KeygenResult {
+    pub hex_secret: String,
+    pub nsec: String,
+    pub pubkey: String,
 }
 
-struct App {
+pub struct App {
     // Config
-    server: String,
-    secret_key: Option<String>,
-    pubkey: Option<String>,
+    pub server: String,
+    pub secret_key: Option<String>,
+    pub pubkey: Option<String>,
 
     // Navigation
-    tab: usize,
+    pub tab: usize,
 
     // Blobs tab
-    blobs: Vec<BlobDescriptor>,
-    blobs_table: TableState,
-    blobs_loading: bool,
-    blobs_error: Option<String>,
+    pub blobs: Vec<BlobDescriptor>,
+    pub blobs_table: TableState,
+    pub blobs_loading: bool,
+    pub blobs_error: Option<String>,
 
     // Upload tab
-    upload_path: String,
-    upload_loading: bool,
-    upload_msg: Option<String>,
-    upload_ok: bool,
-    input_mode: bool,
+    pub upload_path: String,
+    pub upload_loading: bool,
+    pub upload_msg: Option<String>,
+    pub upload_ok: bool,
+    pub input_mode: bool,
 
     // Status tab
-    status_data: Option<serde_json::Value>,
-    status_loading: bool,
-    status_error: Option<String>,
+    pub status_data: Option<serde_json::Value>,
+    pub status_loading: bool,
+    pub status_error: Option<String>,
 
     // Keygen tab
-    keygen_data: Option<KeygenResult>,
+    pub keygen_data: Option<KeygenResult>,
 
     // UI state
-    show_help: bool,
-    notification: Option<(String, bool)>, // (message, is_error)
+    pub show_help: bool,
+    pub notification: Option<(String, bool)>, // (message, is_error)
 
     // Channel sender for async results
-    tx: mpsc::UnboundedSender<AppMsg>,
+    pub tx: mpsc::UnboundedSender<AppMsg>,
 }
 
 impl App {
-    fn new(server: String, secret_key: Option<String>, tx: mpsc::UnboundedSender<AppMsg>) -> Self {
+    pub fn new(server: String, secret_key: Option<String>, tx: mpsc::UnboundedSender<AppMsg>) -> Self {
         let pubkey = secret_key
             .as_deref()
             .and_then(|k| Signer::from_secret_hex(k).ok().map(|s| s.public_key_hex()));
@@ -147,7 +147,7 @@ impl App {
         }
     }
 
-    fn apply(&mut self, msg: AppMsg) {
+    pub fn apply(&mut self, msg: AppMsg) {
         match msg {
             AppMsg::BlobsLoaded(blobs) => {
                 self.blobs_loading = false;
@@ -218,7 +218,7 @@ impl App {
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
-    fn refresh_blobs(&mut self) {
+    pub fn refresh_blobs(&mut self) {
         if self.blobs_loading {
             return;
         }
@@ -247,7 +247,7 @@ impl App {
         });
     }
 
-    fn start_upload(&mut self) {
+    pub fn start_upload(&mut self) {
         let path_str = self.upload_path.trim().to_string();
         if path_str.is_empty() {
             self.upload_msg = Some("Enter a file path first (press i to edit).".into());
@@ -292,7 +292,7 @@ impl App {
         });
     }
 
-    fn delete_selected(&mut self) {
+    pub fn delete_selected(&mut self) {
         if self.secret_key.is_none() {
             self.notification = Some((
                 "A secret key (--key / BLOSSOM_SECRET_KEY) is required for delete.".into(),
@@ -335,7 +335,7 @@ impl App {
         });
     }
 
-    fn refresh_status(&mut self) {
+    pub fn refresh_status(&mut self) {
         if self.status_loading {
             return;
         }
@@ -373,7 +373,7 @@ impl App {
         });
     }
 
-    fn generate_keypair(&mut self) {
+    pub fn generate_keypair(&mut self) {
         let signer = Signer::generate();
         let hex_secret = signer.secret_key_hex();
         let nsec = encode_nsec(&hex_secret).unwrap_or_else(|_| "?".into());
@@ -385,17 +385,17 @@ impl App {
         });
     }
 
-    fn next_tab(&mut self) {
+    pub fn next_tab(&mut self) {
         self.tab = (self.tab + 1) % TAB_NAMES.len();
         self.on_tab_enter();
     }
 
-    fn prev_tab(&mut self) {
+    pub fn prev_tab(&mut self) {
         self.tab = self.tab.checked_sub(1).unwrap_or(TAB_NAMES.len() - 1);
         self.on_tab_enter();
     }
 
-    fn on_tab_enter(&mut self) {
+    pub fn on_tab_enter(&mut self) {
         match self.tab {
             0 if self.blobs.is_empty() && !self.blobs_loading => self.refresh_blobs(),
             2 if self.status_data.is_none() && !self.status_loading => self.refresh_status(),
@@ -403,7 +403,7 @@ impl App {
         }
     }
 
-    fn scroll_up(&mut self) {
+    pub fn scroll_up(&mut self) {
         if self.tab == 0 {
             let i = self
                 .blobs_table
@@ -414,7 +414,7 @@ impl App {
         }
     }
 
-    fn scroll_down(&mut self) {
+    pub fn scroll_down(&mut self) {
         if self.tab == 0 && !self.blobs.is_empty() {
             let max = self.blobs.len() - 1;
             let i = self
@@ -429,7 +429,7 @@ impl App {
 
 // ── Drawing ───────────────────────────────────────────────────────────────────
 
-fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -459,7 +459,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
     let pubkey_info = match &app.pubkey {
         Some(pk) => format!("  pubkey: {}…", &pk[..16]),
         None => "  no key set".into(),
@@ -485,7 +485,7 @@ fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(title, area);
 }
 
-fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let titles: Vec<Line> = TAB_NAMES.iter().map(|&t| Line::from(t)).collect();
     let tabs = Tabs::new(titles)
         .block(
@@ -502,7 +502,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(tabs, area);
 }
 
-fn draw_blobs_tab(f: &mut Frame, app: &mut App, area: Rect) {
+pub fn draw_blobs_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let loading_suffix = if app.blobs_loading {
         " (loading…)"
     } else {
@@ -612,7 +612,7 @@ fn draw_blobs_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(table, inner, &mut app.blobs_table);
 }
 
-fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(" Upload File ")
@@ -730,7 +730,7 @@ fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_status_tab(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_status_tab(f: &mut Frame, app: &App, area: Rect) {
     let loading_suffix = if app.status_loading {
         " (loading…)"
     } else {
@@ -768,7 +768,7 @@ fn draw_status_tab(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_keygen_tab(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_keygen_tab(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Key Generation ")
@@ -835,7 +835,7 @@ fn draw_keygen_tab(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let content = if let Some((msg, is_err)) = &app.notification {
         Line::from(Span::styled(
             format!(" {msg}"),
@@ -867,7 +867,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn draw_help_popup(f: &mut Frame, area: Rect) {
+pub fn draw_help_popup(f: &mut Frame, area: Rect) {
     let popup_w = 62u16.min(area.width.saturating_sub(4));
     let popup_h = 26u16.min(area.height.saturating_sub(4));
     let popup_x = (area.width.saturating_sub(popup_w)) / 2;
@@ -959,8 +959,8 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Entry point for the TUI application. Call from `main()`.
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (server, secret_key) = parse_args()?;
 
     // Set up terminal
@@ -991,7 +991,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-async fn run_loop(
+pub async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     rx: &mut mpsc::UnboundedReceiver<AppMsg>,
@@ -1112,7 +1112,7 @@ async fn run_loop(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Guess a MIME type from the file extension.
-fn mime_from_path(path: &std::path::Path) -> String {
+pub fn mime_from_path(path: &std::path::Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
         Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
@@ -1133,7 +1133,7 @@ fn mime_from_path(path: &std::path::Path) -> String {
 }
 
 /// Human-readable byte size.
-fn format_size(bytes: u64) -> String {
+pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
@@ -1149,7 +1149,7 @@ fn format_size(bytes: u64) -> String {
 }
 
 /// Format a Unix timestamp as `YYYY-MM-DD HH:MM`.
-fn format_unix_ts(ts: u64) -> String {
+pub fn format_unix_ts(ts: u64) -> String {
     // Simple manual UTC conversion without pulling in chrono.
     let secs = ts;
     let mins = secs / 60;
@@ -1168,7 +1168,7 @@ fn format_unix_ts(ts: u64) -> String {
 }
 
 /// Convert days since 1970-01-01 to (year, month, day).
-fn days_to_ymd(d: u64) -> (u64, u64, u64) {
+pub fn days_to_ymd(d: u64) -> (u64, u64, u64) {
     // Algorithm from https://howardhinnant.github.io/date_algorithms.html
     let z = d + 719468;
     let era = z / 146097;
@@ -1184,14 +1184,14 @@ fn days_to_ymd(d: u64) -> (u64, u64, u64) {
 }
 
 /// Encode a hex secret key as `nsec1` bech32.
-fn encode_nsec(hex_key: &str) -> Result<String, String> {
+pub fn encode_nsec(hex_key: &str) -> Result<String, String> {
     let bytes = hex::decode(hex_key).map_err(|e| format!("invalid hex: {e}"))?;
     let hrp = bech32::Hrp::parse("nsec").map_err(|e| format!("hrp: {e}"))?;
     bech32::encode::<bech32::Bech32>(hrp, &bytes).map_err(|e| format!("bech32: {e}"))
 }
 
 /// Decode a secret key from hex or `nsec1` bech32.
-fn decode_secret_key(input: &str) -> Result<String, String> {
+pub fn decode_secret_key(input: &str) -> Result<String, String> {
     if input.starts_with("nsec1") {
         let (hrp, data) = bech32::decode(input).map_err(|e| format!("invalid nsec1: {e}"))?;
         if hrp.as_str() != "nsec" {
@@ -1207,7 +1207,7 @@ fn decode_secret_key(input: &str) -> Result<String, String> {
 }
 
 /// Parse CLI arguments: returns `(server_url, secret_key_hex_opt)`.
-fn parse_args() -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+pub fn parse_args() -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
     let mut server =
         std::env::var("BLOSSOM_SERVER").unwrap_or_else(|_| "http://localhost:3000".into());
     let mut secret_key: Option<String> = std::env::var("BLOSSOM_SECRET_KEY").ok();
@@ -1243,7 +1243,7 @@ fn parse_args() -> Result<(String, Option<String>), Box<dyn std::error::Error>> 
     Ok((server, secret_key))
 }
 
-fn print_usage() {
+pub fn print_usage() {
     println!("blossom-tui — Terminal UI for Blossom blob storage\n");
     println!("USAGE:");
     println!("  blossom-tui [OPTIONS]\n");

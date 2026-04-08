@@ -68,7 +68,7 @@ jobs:
         uses: ./.github/actions/build-blossom-binary
         with:
           name_prefix: blossom-tui
-          cargo_args: --no-default-features --features tui --bin blossom-tui
+          cargo_args: -p blossom-tui
           binaries: blossom-tui
           target: ${{ matrix.target }}
           build: ${{ matrix.build }}

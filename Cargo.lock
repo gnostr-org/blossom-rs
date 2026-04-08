@@ -1123,7 +1123,6 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
- "crossterm",
  "dashmap",
  "hex",
  "image",
@@ -1135,7 +1134,6 @@ dependencies = [
  "pkarr 6.0.0-rc.0",
  "proptest",
  "rand 0.8.5",
- "ratatui",
  "reqwest 0.12.28",
  "secp256k1",
  "serde",
@@ -1176,6 +1174,20 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "blossom-tui"
+version = "0.4.1"
+dependencies = [
+ "bech32",
+ "blossom-rs",
+ "crossterm",
+ "hex",
+ "ratatui",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

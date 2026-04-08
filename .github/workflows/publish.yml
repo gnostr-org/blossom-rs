@@ -27,8 +27,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo publish -p blossom-rs --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  publish-server:
+  publish-nip34:
     needs: publish-lib
+    runs-on: self-hosted
+    environment: crates-io
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sleep 30
+      - run: cargo publish -p blossom-nip34 --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-server:
+    needs: [publish-lib, publish-nip34]
     runs-on: self-hosted
     environment: crates-io
     permissions:

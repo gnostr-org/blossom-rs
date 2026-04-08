@@ -124,8 +124,7 @@ cmd_install() {
         --replace
 
     info "Installing as a launchd service (runs at login)"
-    "$RUNNER_DIR/svc.sh" install
-    "$RUNNER_DIR/svc.sh" start
+    (cd "$RUNNER_DIR" && ./svc.sh install && ./svc.sh start)
 
     info "Done. Runner '$RUNNER_NAME' is registered and running."
     info "View at: https://github.com/organizations/${ORG}/settings/actions/runners"
@@ -133,23 +132,22 @@ cmd_install() {
 
 cmd_start() {
     info "Starting runner service"
-    "$RUNNER_DIR/svc.sh" start
+    (cd "$RUNNER_DIR" && ./svc.sh start)
 }
 
 cmd_stop() {
     info "Stopping runner service"
-    "$RUNNER_DIR/svc.sh" stop
+    (cd "$RUNNER_DIR" && ./svc.sh stop)
 }
 
 cmd_status() {
-    "$RUNNER_DIR/svc.sh" status
+    (cd "$RUNNER_DIR" && ./svc.sh status)
 }
 
 cmd_uninstall() {
     require gh
     info "Stopping and removing service"
-    "$RUNNER_DIR/svc.sh" stop  || true
-    "$RUNNER_DIR/svc.sh" uninstall || true
+    (cd "$RUNNER_DIR" && ./svc.sh stop || true && ./svc.sh uninstall || true)
 
     info "Fetching removal token for org: $ORG"
     TOKEN=$(gh api "orgs/${ORG}/actions/runners/remove-token" \

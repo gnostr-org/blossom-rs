@@ -14,6 +14,8 @@ Repository: `MonumentalSystems/blossom-rs`
 blossom-rs/          — Core library (crates.io: blossom-rs)
 blossom-server/      — API server binary (crates.io: blossom-server)
 blossom-cli/         — CLI client binary (crates.io: blossom-cli)
+xdelta3-rs/          — Vendored xdelta3 bindings (bindgen 0.71)
+xtask/               — Build tasks (sign-release-manifest, source-merkle-tree)
 ```
 
 ## Build & Test Commands
@@ -33,6 +35,7 @@ cargo publish --dry-run -p blossom-rs  # Verify crates.io packaging
 cargo run -p blossom-server                           # Default: filesystem + SQLite
 cargo run -p blossom-server -- --memory               # In-memory mode
 cargo run -p blossom-server -- --enable-admin          # With admin endpoints
+cargo run -p blossom-server -- --no-locks              # Disable BUD-19 locking (on by default)
 
 # Run CLI client
 cargo run -p blossom-cli -- keygen                    # Generate keypair
@@ -53,8 +56,8 @@ cargo run -p blossom-cli -- status                    # Server status
 | `db-postgres` | no | PostgreSQL metadata backend via SQLx |
 | `media` | no | Image processing (WebP, thumbnails, blurhash, EXIF) |
 | `labels` | no | Content labeling (Vision Transformer, LLM API) |
-| `iroh-transport` | no | P2P QUIC transport via iroh (node-ID addressed) |
-| `pkarr-discovery` | no | PKARR endpoint publishing (implies iroh-transport) |
+| `iroh-transport` | yes | P2P QUIC transport via iroh (node-ID addressed) |
+| `pkarr-discovery` | yes | PKARR endpoint publishing via DHT + relays (implies iroh-transport) |
 | `otel` | no | OpenTelemetry OTLP export (Jaeger, Tempo, Seq) |
 
 ## Architecture
@@ -83,9 +86,14 @@ src/
 │   ├── memory.rs       — MemoryDatabase (in-process, no persistence)
 │   ├── sqlite.rs       — SqliteDatabase (SQLx, versioned migrations V1/V2)
 │   └── postgres.rs     — PostgresDatabase (SQLx)
+├── locks/
+│   ├── mod.rs          — LockDatabase trait, MemoryLockDatabase
+│   ├── sqlite.rs       — SqliteLockDatabase (feature-gated: db-sqlite)
+│   └── postgres.rs     — PostgresLockDatabase (feature-gated: db-postgres)
 ├── server/
 │   ├── mod.rs          — BlobServer, BlobServerBuilder, ServerState, handlers
-│   ├── admin.rs        — Admin endpoints (users, quotas, blobs, stats)
+│   ├── admin.rs        — Admin endpoints (users, quotas, blobs, stats, LFS stats)
+│   ├── locks.rs        — BUD-19 lock endpoints (create, list, verify, unlock)
 │   └── nip96.rs        — NIP-96 endpoints (info, upload, list, delete)
 ├── client/
 │   └── mod.rs          — BlossomClient with failover + SHA256 integrity
@@ -109,6 +117,7 @@ src/
 - **`BlossomSigner`** — BIP-340 signing. Implement for your identity type.
 - **`BlobBackend`** — Blob storage (Memory, Filesystem, S3). Wrapped in `Arc<Mutex<>>`.
 - **`BlobDatabase`** — Metadata persistence (uploads, users, quotas, stats, phash).
+- **`LockDatabase`** — BUD-19 file locks (Memory, SQLite, Postgres).
 - **`AccessControl`** — Authorization (OpenAccess, Whitelist, custom).
 - **`WebhookNotifier`** — Event notifications (Noop, HTTP POST, custom).
 - **`MediaProcessor`** — Image/video processing pipeline.
@@ -153,7 +162,7 @@ All key functions instrumented with `#[tracing::instrument]`. OTEL field naming:
 ## CI/CD
 
 - **CI** (`.github/workflows/ci.yml`): On push/PR to master — fmt, build, test, clippy (workspace)
-- **Publish** (`.github/workflows/publish.yml`): On `v*` tags — test → publish lib → publish server + cli
+- **Publish** (`.github/workflows/publish.yml`): On `v*` tags — test → publish lib → publish server + cli → build release binaries → sign with `BLOSSOM_RELEASE_NSEC` → upload to GitHub release
 - Self-hosted runner for trusted pushes; GitHub-hosted for fork PRs
 - GPG signing disabled for CI commits
 
@@ -170,6 +179,9 @@ All key functions instrumented with `#[tracing::instrument]`. OTEL field naming:
 - **BUD-02**: List blobs by pubkey (implemented)
 - **BUD-04**: Mirror from remote URL (implemented)
 - **BUD-06**: Upload requirements advertisement (implemented)
+- **BUD-17**: Chunked storage with Merkle tree manifests (implemented)
+- **BUD-19**: LFS file locking with ownership enforcement (implemented)
+- **BUD-20**: LFS-aware storage efficiency — zstd + xdelta3 (implemented)
 - **NIP-96**: Nostr file storage protocol (implemented)
 - **NIP-98**: HTTP auth via kind:27235 events (implemented)
 - **NIP-01**: Nostr event format (used for auth)

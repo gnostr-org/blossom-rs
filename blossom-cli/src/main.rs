@@ -118,6 +118,9 @@ enum Command {
         /// PKARR public key (z-base-32, e.g., pk:z...).
         public_key: String,
     },
+    /// NIP-34 relay admin commands (requires auth + admin access).
+    #[command(subcommand)]
+    Relay(RelayCommand),
 }
 
 #[derive(Subcommand)]
@@ -155,6 +158,43 @@ enum AdminCommand {
     /// Remove a pubkey from the whitelist.
     WhitelistRemove {
         /// Hex-encoded public key to remove.
+        pubkey: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RelayCommand {
+    /// Show relay policy summary.
+    Policy,
+    /// List relay whitelist.
+    WhitelistList,
+    /// Add pubkey to relay whitelist.
+    WhitelistAdd {
+        /// Hex-encoded public key.
+        pubkey: String,
+    },
+    /// Remove pubkey from relay whitelist.
+    WhitelistRemove {
+        /// Hex-encoded public key.
+        pubkey: String,
+    },
+    /// List relay blacklist.
+    BlacklistList,
+    /// Add pubkey to relay blacklist.
+    BlacklistAdd {
+        /// Hex-encoded public key.
+        pubkey: String,
+    },
+    /// Remove pubkey from relay blacklist.
+    BlacklistRemove {
+        /// Hex-encoded public key.
+        pubkey: String,
+    },
+    /// List relay admin pubkeys.
+    AdminList,
+    /// Add relay admin pubkey.
+    AdminAdd {
+        /// Hex-encoded public key.
         pubkey: String,
     },
 }
@@ -653,6 +693,166 @@ async fn run(args: Args) -> Result<(), String> {
                 "iroh_url": iroh_node_id.as_ref().map(|id| format!("iroh://{}", id)),
             });
             print_output(&args.format, &result);
+            Ok(())
+        }
+        Command::Relay(relay_cmd) => {
+            let signer = get_signer(&args.key)?;
+            let http = reqwest::Client::new();
+            let auth = build_blossom_auth(&signer, "admin", None, None, "");
+            let auth_header = auth_header_value(&auth);
+            let base = args.server.trim_end_matches('/');
+
+            match relay_cmd {
+                RelayCommand::Policy => {
+                    let resp = http
+                        .get(format!("{}/relay/admin/policy", base))
+                        .header("Authorization", &auth_header)
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay policy failed: {text}"));
+                    }
+                }
+                RelayCommand::WhitelistList => {
+                    let resp = http
+                        .get(format!("{}/relay/admin/whitelist", base))
+                        .header("Authorization", &auth_header)
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay whitelist-list failed: {text}"));
+                    }
+                }
+                RelayCommand::WhitelistAdd { pubkey } => {
+                    let resp = http
+                        .put(format!("{}/relay/admin/whitelist", base))
+                        .header("Authorization", &auth_header)
+                        .json(&serde_json::json!({"pubkey": pubkey}))
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay whitelist-add failed: {text}"));
+                    }
+                }
+                RelayCommand::WhitelistRemove { pubkey } => {
+                    let resp = http
+                        .delete(format!("{}/relay/admin/whitelist", base))
+                        .header("Authorization", &auth_header)
+                        .json(&serde_json::json!({"pubkey": pubkey}))
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay whitelist-remove failed: {text}"));
+                    }
+                }
+                RelayCommand::BlacklistList => {
+                    let resp = http
+                        .get(format!("{}/relay/admin/blacklist", base))
+                        .header("Authorization", &auth_header)
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay blacklist-list failed: {text}"));
+                    }
+                }
+                RelayCommand::BlacklistAdd { pubkey } => {
+                    let resp = http
+                        .put(format!("{}/relay/admin/blacklist", base))
+                        .header("Authorization", &auth_header)
+                        .json(&serde_json::json!({"pubkey": pubkey}))
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay blacklist-add failed: {text}"));
+                    }
+                }
+                RelayCommand::BlacklistRemove { pubkey } => {
+                    let resp = http
+                        .delete(format!("{}/relay/admin/blacklist", base))
+                        .header("Authorization", &auth_header)
+                        .json(&serde_json::json!({"pubkey": pubkey}))
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay blacklist-remove failed: {text}"));
+                    }
+                }
+                RelayCommand::AdminList => {
+                    let resp = http
+                        .get(format!("{}/relay/admin/admins", base))
+                        .header("Authorization", &auth_header)
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay admin-list failed: {text}"));
+                    }
+                }
+                RelayCommand::AdminAdd { pubkey } => {
+                    let resp = http
+                        .put(format!("{}/relay/admin/admins", base))
+                        .header("Authorization", &auth_header)
+                        .json(&serde_json::json!({"pubkey": pubkey}))
+                        .send()
+                        .await
+                        .map_err(|e| format!("request: {e}"))?;
+                    if resp.status().is_success() {
+                        let body: serde_json::Value =
+                            resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                        print_output(&args.format, &body);
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(format!("relay admin-add failed: {text}"));
+                    }
+                }
+            }
             Ok(())
         }
     }

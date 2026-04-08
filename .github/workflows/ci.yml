@@ -69,5 +69,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: cargo check (${{ matrix.label }})
-        run: cargo check ${{ matrix.flags }}
+      - name: cargo test (${{ matrix.label }})
+        run: cargo test ${{ matrix.flags }}

@@ -141,3 +141,40 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "htt
 serial_test = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
+
+[[test]]
+name = "integration"
+required-features = ["server", "client", "filesystem", "lfs"]
+
+[[test]]
+name = "iroh_integration"
+required-features = ["iroh-transport"]
+
+[[test]]
+name = "iroh_lfs_tests"
+required-features = ["iroh-transport", "lfs"]
+
+[[test]]
+name = "lfs_storage_tests"
+required-features = ["server", "lfs"]
+
+[[test]]
+name = "lock_tests"
+required-features = ["server"]
+
+[[test]]
+name = "pkarr_integration"
+required-features = ["pkarr-discovery"]
+
+[[test]]
+name = "postgres_integration"
+required-features = ["db-postgres"]
+
+[[test]]
+name = "s3_integration"
+required-features = ["s3"]
+
+[[test]]
+name = "sqlite_integration"
+required-features = ["db-sqlite"]
+

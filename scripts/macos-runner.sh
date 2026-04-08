@@ -30,11 +30,23 @@
 
 set -euo pipefail
 
+# ── arch detection ────────────────────────────────────────────────────────────
+ARCH="$(uname -m)"
+if [[ "$ARCH" == "arm64" ]]; then
+    _DEFAULT_NAME="$(hostname -s)-arm"
+    _DEFAULT_LABELS="self-hosted,macOS,ARM64,macos-latest"
+    _RUNNER_ASSET="osx-arm64"
+else
+    _DEFAULT_NAME="$(hostname -s)-intel"
+    _DEFAULT_LABELS="self-hosted,macOS,X64,macos-15-intel"
+    _RUNNER_ASSET="osx-x64"
+fi
+
 RUNNER_DIR=""   # resolved after arg parsing
 ORG="${RUNNER_ORG:-MonumentalSystems}"
 REPO="${RUNNER_REPO:-}"
-RUNNER_NAME="${RUNNER_NAME:-$(hostname -s)-intel}"
-RUNNER_LABELS="self-hosted,macOS,X64,macos-15-intel"
+RUNNER_NAME="${RUNNER_NAME:-$_DEFAULT_NAME}"
+RUNNER_LABELS="${RUNNER_LABELS:-$_DEFAULT_LABELS}"
 RUNNER_GROUP="Default"
 FORCE_REMOVE=0
 
@@ -124,7 +136,7 @@ latest_runner_url() {
 import sys, json
 assets = json.load(sys.stdin)['assets']
 url = next(a['browser_download_url'] for a in assets
-           if 'osx-x64' in a['name'] and a['name'].endswith('.tar.gz'))
+           if '${_RUNNER_ASSET}' in a['name'] and a['name'].endswith('.tar.gz'))
 print(url)
 "
 }
@@ -146,6 +158,8 @@ cmd_install() {
     require gh
     require curl
     require python3
+
+    info "Detected architecture: $ARCH (asset: $_RUNNER_ASSET)"
 
     if [[ $FORCE_REMOVE -eq 1 ]]; then
         cmd_remove

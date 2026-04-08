@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use nostr::Kind;
+
 /// Configuration for the NIP-34 relay and GRASP git server.
 #[derive(Debug, Clone)]
 pub struct Nip34Config {
@@ -13,12 +15,22 @@ pub struct Nip34Config {
     pub repos_path: PathBuf,
     /// Path to git binary.
     pub git_path: String,
-    /// Maximum Nostr event size in bytes.
+    /// Maximum Nostr event size in bytes (0 = unlimited).
     pub max_event_size: usize,
     /// Maximum concurrent WebSocket connections.
     pub max_connections: Option<u32>,
     /// Rate limit: events per minute per connection.
     pub rate_limit_events_per_min: u32,
+    /// Admin pubkeys (hex) — bypass all relay restrictions.
+    pub admin_pubkeys: Vec<String>,
+    /// Whitelisted pubkeys (hex) — if non-empty, only these can write.
+    pub whitelist_pubkeys: Vec<String>,
+    /// Blacklisted pubkeys (hex) — always rejected.
+    pub blacklist_pubkeys: Vec<String>,
+    /// Allowed event kinds — if non-empty, only these accepted.
+    pub allowed_kinds: Vec<Kind>,
+    /// Disallowed event kinds — always rejected.
+    pub disallowed_kinds: Vec<Kind>,
     /// NIP-11 relay information.
     pub nip11: Nip11Info,
 }
@@ -42,6 +54,11 @@ impl Default for Nip34Config {
             max_event_size: 150 * 1024, // 150 KB
             max_connections: None,
             rate_limit_events_per_min: 120,
+            admin_pubkeys: Vec::new(),
+            whitelist_pubkeys: Vec::new(),
+            blacklist_pubkeys: Vec::new(),
+            allowed_kinds: Vec::new(),
+            disallowed_kinds: Vec::new(),
             nip11: Nip11Info::default(),
         }
     }

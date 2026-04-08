@@ -8,12 +8,18 @@ use nostr_relay_builder::LocalRelay;
 
 use crate::config::Nip34Config;
 use crate::relay;
+use crate::relay::policies::RelayPolicy;
+use crate::relay::policy_db::PolicyDb;
 
 /// Shared state for all NIP-34 handlers.
 pub struct Nip34State {
     pub config: Nip34Config,
     pub relay: Arc<LocalRelay>,
     pub database: Arc<dyn NostrDatabase>,
+    /// Runtime-mutable relay policy (whitelist, blacklist, admin, kind filters).
+    pub policy: Arc<RelayPolicy>,
+    /// SQLite-backed policy persistence.
+    pub policy_db: PolicyDb,
 }
 
 impl Nip34State {
@@ -26,20 +32,54 @@ impl Nip34State {
         let database: Arc<dyn NostrDatabase> =
             Arc::new(nostr_lmdb::NostrLMDB::open(&config.lmdb_path)?);
 
-        // Build the relay
-        let local_relay = relay::build_relay(&config, database.clone()).await?;
+        // Build policy (shared with relay for runtime mutation)
+        let policy = Arc::new(RelayPolicy::with_config(
+            config.admin_pubkeys.clone(),
+            config.max_event_size,
+        ));
+        for pk in &config.whitelist_pubkeys {
+            policy.add_whitelist(pk);
+        }
+        for pk in &config.blacklist_pubkeys {
+            policy.add_blacklist(pk);
+        }
+        if !config.allowed_kinds.is_empty() {
+            policy.set_allowed_kinds(config.allowed_kinds.clone());
+        }
+        for kind in &config.disallowed_kinds {
+            policy.add_disallowed_kind(*kind);
+        }
+
+        // Open policy database (alongside LMDB dir)
+        let policy_db_path = config
+            .lmdb_path
+            .parent()
+            .unwrap_or(&config.lmdb_path)
+            .join("relay_policy.db");
+        let policy_db = PolicyDb::open_sqlite(policy_db_path.to_str().unwrap_or("relay_policy.db"))
+            .await
+            .map_err(|e| format!("policy db: {e}"))?;
+
+        // Load persisted policy state from DB
+        policy_db
+            .load_into(&policy)
+            .await
+            .map_err(|e| format!("load policy: {e}"))?;
+
+        // Build the relay with the shared policy
+        let local_relay = relay::build_relay(&config, database.clone(), policy.clone()).await?;
 
         Ok(Self {
             config,
             relay: Arc::new(local_relay),
             database,
+            policy,
+            policy_db,
         })
     }
 
     /// Get the filesystem path for a repository.
-    /// Returns `None` if the repo name is invalid.
     pub fn repo_path(&self, npub: &str, repo_name: &str) -> Option<PathBuf> {
-        // Validate repo name: alphanumeric + hyphens + underscores, max 30 chars
         if repo_name.is_empty()
             || repo_name.len() > 30
             || !repo_name
@@ -49,12 +89,12 @@ impl Nip34State {
             return None;
         }
 
-        let path = self
-            .config
-            .repos_path
-            .join(npub)
-            .join(format!("{}.git", repo_name));
-        Some(path)
+        Some(
+            self.config
+                .repos_path
+                .join(npub)
+                .join(format!("{}.git", repo_name)),
+        )
     }
 
     /// Check if a repository exists on disk.
@@ -94,7 +134,6 @@ impl Nip34State {
             return Err("git init --bare failed".into());
         }
 
-        // Write description
         let desc_path = path.join("description");
         tokio::fs::write(&desc_path, description)
             .await

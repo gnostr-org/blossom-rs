@@ -121,11 +121,29 @@ function RemovalToken {
     }
 }
 
-function LatestRunnerUrl {
+function LatestRunnerInfo {
+    # Returns hashtable with Url and Sha256
     $release = Invoke-RestMethod 'https://api.github.com/repos/actions/runner/releases/latest'
     $asset   = $release.assets | Where-Object { $_.name -like '*win-x64*.zip' } | Select-Object -First 1
     if (-not $asset) { Err 'Could not find win-x64 runner asset in latest release.' }
-    $asset.browser_download_url
+    $sha = ($asset.digest -replace '^sha256:', '')
+    @{ Url = $asset.browser_download_url; Sha256 = $sha }
+}
+
+function Verify-Archive {
+    param([string]$File, [string]$Expected)
+    if (-not $Expected) {
+        Warn "No SHA256 from API — skipping verification"
+        return
+    }
+    $actual = (Get-FileHash -Path $File -Algorithm SHA256).Hash.ToLower()
+    Info "SHA256 expected: $Expected"
+    Info "SHA256 actual:   $actual"
+    if ($actual -eq $Expected) {
+        Info "SHA256 verified ✓"
+    } else {
+        Err "SHA256 mismatch!"
+    }
 }
 
 # ── resolve runner dir ────────────────────────────────────────────────────────

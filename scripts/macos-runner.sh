@@ -54,7 +54,7 @@ FORCE_REMOVE=0
 info()  { echo "[info]  $*"; }
 error() { echo "[error] $*" >&2; exit 1; }
 
-# Run a command in the background with an ASCII spinner.
+# Run a command in the background with an ASCII spinner on the right.
 # Usage: with_spinner "label" cmd [args...]
 with_spinner() {
     local label="$1"; shift
@@ -63,18 +63,17 @@ with_spinner() {
     local pid=$!
     local frames=('|' '/' '-' '\\')
     local i=0
-    printf "        "
     while kill -0 "$pid" 2>/dev/null; do
-        printf "\r[spin]  %s  %s" "${frames[$((i % 4))]}" "$label"
+        printf "\r[info]  %s  %s " "$label" "${frames[$((i % 4))]}"
         i=$((i + 1))
         sleep 0.1
     done
     wait "$pid"
     local rc=$?
     if [[ $rc -eq 0 ]]; then
-        printf "\r[info]  ✓  %s\n" "$label"
+        printf "\r[info]  %s  ✓\n" "$label"
     else
-        printf "\r[error] ✗  %s (exit %d)\n" "$label" "$rc" >&2
+        printf "\r[error] %s  ✗ (exit %d)\n" "$label" "$rc" >&2
         cat "$log" >&2
         rm -f "$log"
         exit "$rc"

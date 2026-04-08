@@ -59,79 +59,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 50
-
-    - name: Set build name
-      shell: bash
-      run: |
-        SAFE_REF="${GITHUB_REF_NAME//\//-}"
-        echo "BUILD_NAME=blossom-${SAFE_REF}-${{ matrix.target }}" >> "$GITHUB_ENV"
-
-    - name: Fetch tags
-      run: git fetch --tags --force
-
-    - name: Cache
-      uses: actions/cache@v4
-      with:
-        path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-        key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Install Linux system dependencies
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libssl-dev pkg-config musl-tools
-
-    - name: Install cross
-      uses: taiki-e/install-action@v2
-      with:
-        tool: cross
-
-    - name: Build release binary
-      run: cross build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli
-
-    - name: Bundle release (Unix)
-      if: matrix.build != 'windows-x64'
-      shell: bash
-      run: |
-        mkdir -p "$BUILD_NAME"
-        cp README.md LICENSE "$BUILD_NAME/"
-        cp "target/${{ matrix.target }}/release/blossom-server" "$BUILD_NAME/"
-        cp "target/${{ matrix.target }}/release/blossom-cli" "$BUILD_NAME/"
-
-    - name: Bundle release (Windows)
-      if: matrix.build == 'windows-x64'
-      shell: bash
-      run: |
-        mkdir -p "$BUILD_NAME"
-        cp README.md LICENSE "$BUILD_NAME/"
-        cp "target/${{ matrix.target }}/release/blossom-server.exe" "$BUILD_NAME/"
-        cp "target/${{ matrix.target }}/release/blossom-cli.exe" "$BUILD_NAME/"
-
-    - name: Run smoke test (Unix)
-      if: matrix.native && matrix.build != 'windows-x64'
-      shell: bash
-      run: |
-        "$BUILD_NAME/blossom-server" --version
-        "$BUILD_NAME/blossom-cli" --version
-
-    - name: Run smoke test (Windows)
-      if: matrix.native && matrix.build == 'windows-x64'
-      shell: bash
-      run: |
-        "$BUILD_NAME/blossom-server.exe" --version
-        "$BUILD_NAME/blossom-cli.exe" --version
-
-    - name: Upload asset
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.BUILD_NAME }}
-        path: ${{ env.BUILD_NAME }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+      - name: Build blossom artifact
+        uses: ./.github/actions/build-blossom-binary
+        with:
+          name_prefix: blossom
+          cargo_args: -p blossom-server -p blossom-cli
+          binaries: blossom-server blossom-cli
+          target: ${{ matrix.target }}
+          build: ${{ matrix.build }}
+          native: ${{ matrix.native }}

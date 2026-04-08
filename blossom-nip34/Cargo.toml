@@ -1,0 +1,39 @@
+[package]
+name = "blossom-nip34"
+version = "0.1.0"
+edition = "2021"
+description = "NIP-34 Nostr relay + GRASP git server library for Blossom"
+license = "MIT"
+repository = "https://github.com/MonumentalSystems/blossom-rs"
+keywords = ["nostr", "nip34", "git", "relay", "grasp"]
+categories = ["web-programming", "development-tools"]
+
+[dependencies]
+# Nostr relay infrastructure (MIT)
+nostr = { version = "0.44", default-features = false, features = ["std"] }
+nostr-database = "0.44"
+nostr-lmdb = "0.44"
+nostr-relay-builder = "0.44"
+
+# HTTP framework
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "timeout", "trace"] }
+tower = { version = "0.5", features = ["limit"] }
+
+# Async
+tokio = { version = "1", features = ["process", "fs", "io-util", "macros"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Observability
+tracing = "0.1"
+
+# Utilities
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+tempfile = "3"

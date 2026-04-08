@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "blossom-server", "blossom-cli", "xtask"]
+members = [".", "blossom-server", "blossom-cli", "xtask", "blossom-nip34"]
 
 [package]
 name = "blossom-rs"

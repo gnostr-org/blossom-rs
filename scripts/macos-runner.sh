@@ -198,7 +198,7 @@ cmd_install() {
 
     info "Resolving latest runner release..."
     URL=$(latest_runner_url)
-    VERSION=$(echo "$URL" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    VERSION=$(echo "$URL" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     info "Runner version: $VERSION"
 
     info "Installing runner to $RUNNER_DIR"
@@ -222,8 +222,7 @@ cmd_install() {
             curl -#fL "$URL" -o "$ARCHIVE"
         fi
     fi
-    tar xzf "$ARCHIVE" -C "$RUNNER_DIR"
-
+    with_spinner "Extracting runner archive..." tar xzf "$ARCHIVE" -C "$RUNNER_DIR"
 
     info "Configuring runner (name=$RUNNER_NAME, labels=$RUNNER_LABELS)"
     with_spinner "Configuring runner..." \

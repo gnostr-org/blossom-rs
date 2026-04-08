@@ -12,6 +12,7 @@ jobs:
   test:
     runs-on: self-hosted
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - run: cargo test --workspace
 
@@ -22,6 +23,7 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: ./.github/actions/publish-crate
         with:
@@ -35,6 +37,7 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: ./.github/actions/publish-crate
         with:
@@ -49,6 +52,7 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: ./.github/actions/publish-crate
         with:

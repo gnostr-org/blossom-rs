@@ -54,6 +54,34 @@ FORCE_REMOVE=0
 info()  { echo "[info]  $*"; }
 error() { echo "[error] $*" >&2; exit 1; }
 
+# Run a command in the background with an ASCII spinner.
+# Usage: with_spinner "label" cmd [args...]
+with_spinner() {
+    local label="$1"; shift
+    local log; log="$(mktemp)"
+    "$@" >"$log" 2>&1 &
+    local pid=$!
+    local frames=('|' '/' '-' '\\')
+    local i=0
+    printf "        "
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r[spin]  %s  %s" "${frames[$((i % 4))]}" "$label"
+        i=$((i + 1))
+        sleep 0.1
+    done
+    wait "$pid"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        printf "\r[info]  ✓  %s\n" "$label"
+    else
+        printf "\r[error] ✗  %s (exit %d)\n" "$label" "$rc" >&2
+        cat "$log" >&2
+        rm -f "$log"
+        exit "$rc"
+    fi
+    rm -f "$log"
+}
+
 usage() {
     awk '/^# Usage:/,/^[^#]/' "$0" | grep '^#' | sed 's/^#[[:space:]]\{0,2\}//'
     exit 0
@@ -198,21 +226,25 @@ cmd_install() {
 
 
     info "Configuring runner (name=$RUNNER_NAME, labels=$RUNNER_LABELS)"
-    "$RUNNER_DIR/config.sh" \
-        --url "$(runner_url)" \
-        --token "$TOKEN" \
-        --name "$RUNNER_NAME" \
-        --labels "$RUNNER_LABELS" \
-        --runnergroup "$RUNNER_GROUP" \
-        --work "$RUNNER_DIR/_work" \
-        --unattended \
-        --replace
+    with_spinner "Configuring runner..." \
+        "$RUNNER_DIR/config.sh" \
+            --url "$(runner_url)" \
+            --token "$TOKEN" \
+            --name "$RUNNER_NAME" \
+            --labels "$RUNNER_LABELS" \
+            --runnergroup "$RUNNER_GROUP" \
+            --work "$RUNNER_DIR/_work" \
+            --unattended \
+            --replace
 
     info "Installing as a launchd service (runs at login)"
     # Remove stale plist if present (svc.sh install fails if it already exists)
     (cd "$RUNNER_DIR" && ./svc.sh stop 2>/dev/null || true)
     (cd "$RUNNER_DIR" && ./svc.sh uninstall 2>/dev/null || true)
-    (cd "$RUNNER_DIR" && ./svc.sh install && ./svc.sh start)
+    with_spinner "Installing launchd service..." \
+        bash -c "cd '$RUNNER_DIR' && ./svc.sh install"
+    with_spinner "Starting service..." \
+        bash -c "cd '$RUNNER_DIR' && ./svc.sh start"
 
     info "Done. Runner '$RUNNER_NAME' is registered and running."
     info "View at: $(runners_settings_url)"

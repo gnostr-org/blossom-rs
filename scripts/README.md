@@ -37,13 +37,90 @@ Registers with labels `self-hosted,Linux,X64` and installs as a **systemd servic
 
 ---
 
-## Common options
+## windows-runner.ps1
+
+Install and manage a GitHub Actions self-hosted runner on Windows (x86_64).
+Registers with labels `self-hosted,Windows,X64,windows-latest` and installs
+as a **Windows service** via the runner's built-in `svc.cmd`.
+
+### Prerequisites
+
+- Windows x86_64
+- [`gh`](https://cli.github.com/) authenticated with org or repo admin rights
+- PowerShell 7+ (or Windows PowerShell 5.1 with `??` operator support)
+- Run as **Administrator** (required for Windows service install/uninstall)
+
+### Usage
+
+```powershell
+.\scripts\windows-runner.ps1 [[-Action] <action>] [options]
+```
+
+**Actions**
+
+| Action      | Description                                              |
+|-------------|----------------------------------------------------------|
+| `install`   | Download, configure, and start the runner *(default)*    |
+| `remove`    | Deregister runner from GitHub (keeps files on disk)      |
+| `start`     | Start the service                                        |
+| `stop`      | Stop the service                                         |
+| `status`    | Show service status                                      |
+| `uninstall` | Stop service, deregister from GitHub, delete runner dir  |
+
+**Options**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-Org` | `MonumentalSystems` | GitHub organization |
+| `-Repo` | *(none — org-scoped)* | Scope to a single repo |
+| `-Name` | `<COMPUTERNAME>-windows` | Runner display name |
+| `-Labels` | `self-hosted,Windows,X64,windows-latest` | Comma-separated labels |
+| `-Dir` | `$Home\actions-runner` | Runner install directory |
+| `-Group` | `Default` | Runner group |
+| `-Remove` | — | Remove existing config before installing |
+
+### Examples
+
+```powershell
+# Default install
+.\scripts\windows-runner.ps1 install
+
+# Different org
+.\scripts\windows-runner.ps1 -Org gnostr-org install
+
+# Repo-scoped runner
+.\scripts\windows-runner.ps1 -Org gnostr-org -Repo blossom-rs install
+
+# Reconfigure existing runner
+.\scripts\windows-runner.ps1 -Remove install
+
+# Status / teardown
+.\scripts\windows-runner.ps1 status
+.\scripts\windows-runner.ps1 uninstall
+```
+
+### Archive caching
+
+Same strategy as the bash scripts: when `-Repo` is used, `runner.zip` is
+cached in the parent dir (`$Home\actions-runner\runner.zip`) and copied into
+the repo-scoped dir for sibling repos.
+
+```powershell
+# Force re-download
+Remove-Item "$HOME\actions-runner\runner.zip"
+.\scripts\windows-runner.ps1 -Repo blossom-rs install
+```
+
+---
+
+
 
 ### Usage
 
 ```
 ./scripts/macos-runner.sh [options] [action]
 ./scripts/linux-runner.sh [options] [action]
+.\scripts\windows-runner.ps1 [[-Action] <action>] [options]
 ```
 
 **Actions**
@@ -131,10 +208,11 @@ rm ~/actions-runner/runner.tar.gz
 
 ### Service manager
 
-| OS | Service manager | Requires sudo |
-|----|----------------|---------------|
+| OS | Service manager | Requires elevated rights |
+|----|----------------|--------------------------|
 | macOS | launchd (`~/Library/LaunchAgents`) | No |
-| Linux | systemd | Yes (install/uninstall only) |
+| Linux | systemd | Yes — `sudo` (install/uninstall only) |
+| Windows | Windows Service (`svc.cmd`) | Yes — run as Administrator |
 
 ### Environment variables
 

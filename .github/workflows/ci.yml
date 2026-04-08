@@ -50,6 +50,7 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
@@ -91,6 +92,7 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
@@ -139,6 +141,7 @@ jobs:
           - label: all-features
             flags: --all-features
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - name: cargo test (${{ matrix.label }})
         run: cargo test ${{ matrix.flags }}

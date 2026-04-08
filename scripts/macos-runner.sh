@@ -16,10 +16,12 @@
 #                        (default: self-hosted,macOS,X64,macos-15-intel)
 #   --dir <path>         Runner install directory (default: ~/actions-runner)
 #   --group <group>      Runner group (default: Default)
+#   --remove             Remove existing runner config before installing
 #
 # Examples:
 #   ./scripts/macos-runner.sh --org my-org install
 #   ./scripts/macos-runner.sh --org my-org --name my-runner status
+#   ./scripts/macos-runner.sh --remove install   # reconfigure from scratch
 
 set -euo pipefail
 
@@ -28,6 +30,7 @@ ORG="${RUNNER_ORG:-MonumentalSystems}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname -s)-intel}"
 RUNNER_LABELS="self-hosted,macOS,X64,macos-15-intel"
 RUNNER_GROUP="Default"
+FORCE_REMOVE=0
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 info()  { echo "[info]  $*"; }
@@ -51,8 +54,9 @@ while [[ $# -gt 0 ]]; do
         --labels) RUNNER_LABELS="${2:?'--labels requires a value'}"; shift 2 ;;
         --dir)    RUNNER_DIR="${2:?'--dir requires a value'}";       shift 2 ;;
         --group)  RUNNER_GROUP="${2:?'--group requires a value'}";   shift 2 ;;
+        --remove) FORCE_REMOVE=1; shift ;;
         --help|-h) usage ;;
-        install|start|stop|status|uninstall) ACTION="$1"; shift ;;
+        install|start|stop|status|uninstall|remove) ACTION="$1"; shift ;;
         *) error "Unknown argument '$1'. Run with --help for usage." ;;
     esac
 done
@@ -69,10 +73,27 @@ print(url)
 }
 
 # ── commands ─────────────────────────────────────────────────────────────────
+cmd_remove() {
+    if [[ ! -f "$RUNNER_DIR/config.sh" ]]; then
+        info "No runner config found at $RUNNER_DIR — nothing to remove."
+        return 0
+    fi
+    require gh
+    info "Fetching removal token for org: $ORG"
+    TOKEN=$(gh api "orgs/${ORG}/actions/runners/remove-token" \
+                --method POST --jq '.token')
+    info "Removing runner config from GitHub"
+    "$RUNNER_DIR/config.sh" remove --token "$TOKEN"
+}
+
 cmd_install() {
     require gh
     require curl
     require python3
+
+    if [[ $FORCE_REMOVE -eq 1 ]]; then
+        cmd_remove
+    fi
 
     info "Fetching registration token for org: $ORG"
     TOKEN=$(gh api "orgs/${ORG}/actions/runners/registration-token" \
@@ -145,9 +166,10 @@ cmd_uninstall() {
 # ── entrypoint ────────────────────────────────────────────────────────────────
 case "$ACTION" in
     install)   cmd_install   ;;
+    remove)    cmd_remove    ;;
     start)     cmd_start     ;;
     stop)      cmd_stop      ;;
     status)    cmd_status    ;;
     uninstall) cmd_uninstall ;;
-    *)         error "Unknown action '$ACTION'. Use: install | start | stop | status | uninstall" ;;
+    *)         error "Unknown action '$ACTION'. Use: install | remove | start | stop | status | uninstall" ;;
 esac

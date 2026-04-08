@@ -177,7 +177,21 @@ cmd_install() {
     mkdir -p "$RUNNER_DIR"
 
     ARCHIVE="$RUNNER_DIR/runner.tar.gz"
-    curl -fsSL "$URL" -o "$ARCHIVE"
+    PARENT_ARCHIVE="$(dirname "$RUNNER_DIR")/runner.tar.gz"
+
+    if [[ -n "$REPO" && -f "$PARENT_ARCHIVE" ]]; then
+        info "Reusing existing archive from parent: $PARENT_ARCHIVE"
+        cp "$PARENT_ARCHIVE" "$ARCHIVE"
+    else
+        info "Downloading runner archive..."
+        # Download to parent dir when repo-scoped so sibling repos can reuse it
+        if [[ -n "$REPO" ]]; then
+            curl -fsSL "$URL" -o "$PARENT_ARCHIVE"
+            cp "$PARENT_ARCHIVE" "$ARCHIVE"
+        else
+            curl -fsSL "$URL" -o "$ARCHIVE"
+        fi
+    fi
     tar xzf "$ARCHIVE" -C "$RUNNER_DIR"
 
 

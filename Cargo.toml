@@ -18,7 +18,7 @@ default = ["server", "client", "filesystem", "lfs"]
 
 # Core
 server = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:reqwest", "lfs"]
-client = ["dep:reqwest"]
+client = ["dep:reqwest", "dep:zstd", "dep:xdelta3"]
 filesystem = []
 
 # Storage backends

@@ -26,7 +26,9 @@ use std::time::Duration;
 
 use blossom_rs::{BlobDescriptor, BlossomClient, BlossomSigner, Signer};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -114,9 +116,9 @@ struct App {
 
 impl App {
     fn new(server: String, secret_key: Option<String>, tx: mpsc::UnboundedSender<AppMsg>) -> Self {
-        let pubkey = secret_key.as_deref().and_then(|k| {
-            Signer::from_secret_hex(k).ok().map(|s| s.public_key_hex())
-        });
+        let pubkey = secret_key
+            .as_deref()
+            .and_then(|k| Signer::from_secret_hex(k).ok().map(|s| s.public_key_hex()));
 
         let mut blobs_table = TableState::default();
         blobs_table.select(Some(0));
@@ -153,7 +155,12 @@ impl App {
                 let sel = if blobs.is_empty() {
                     None
                 } else {
-                    Some(self.blobs_table.selected().unwrap_or(0).min(blobs.len() - 1))
+                    Some(
+                        self.blobs_table
+                            .selected()
+                            .unwrap_or(0)
+                            .min(blobs.len() - 1),
+                    )
                 };
                 self.blobs = blobs;
                 self.blobs_table.select(sel);
@@ -267,7 +274,8 @@ impl App {
             let signer = match Signer::from_secret_hex(&key) {
                 Ok(s) => s,
                 Err(e) => {
-                    tx.send(AppMsg::UploadError(format!("invalid key: {e}"))).ok();
+                    tx.send(AppMsg::UploadError(format!("invalid key: {e}")))
+                        .ok();
                     return;
                 }
             };
@@ -307,7 +315,8 @@ impl App {
             let signer = match Signer::from_secret_hex(&key) {
                 Ok(s) => s,
                 Err(e) => {
-                    tx.send(AppMsg::DeleteError(format!("invalid key: {e}"))).ok();
+                    tx.send(AppMsg::DeleteError(format!("invalid key: {e}")))
+                        .ok();
                     return;
                 }
             };
@@ -354,7 +363,8 @@ impl App {
                     }
                 }
                 Ok(resp) => {
-                    tx.send(AppMsg::StatusError(format!("HTTP {}", resp.status()))).ok();
+                    tx.send(AppMsg::StatusError(format!("HTTP {}", resp.status())))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(AppMsg::StatusError(format!("request: {e}"))).ok();
@@ -368,7 +378,11 @@ impl App {
         let hex_secret = signer.secret_key_hex();
         let nsec = encode_nsec(&hex_secret).unwrap_or_else(|_| "?".into());
         let pubkey = signer.public_key_hex();
-        self.keygen_data = Some(KeygenResult { hex_secret, nsec, pubkey });
+        self.keygen_data = Some(KeygenResult {
+            hex_secret,
+            nsec,
+            pubkey,
+        });
     }
 
     fn next_tab(&mut self) {
@@ -462,7 +476,10 @@ fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
             format!(" {}", app.server),
             Style::default().fg(Color::White).bg(COLOR_TITLE_BG),
         ),
-        Span::styled(pubkey_info, Style::default().fg(COLOR_DIM).bg(COLOR_TITLE_BG)),
+        Span::styled(
+            pubkey_info,
+            Style::default().fg(COLOR_DIM).bg(COLOR_TITLE_BG),
+        ),
     ]))
     .style(Style::default().bg(COLOR_TITLE_BG));
     f.render_widget(title, area);
@@ -471,7 +488,11 @@ fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let titles: Vec<Line> = TAB_NAMES.iter().map(|&t| Line::from(t)).collect();
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" blossom-tui "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" blossom-tui "),
+        )
         .select(app.tab)
         .highlight_style(
             Style::default()
@@ -482,7 +503,11 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_blobs_tab(f: &mut Frame, app: &mut App, area: Rect) {
-    let loading_suffix = if app.blobs_loading { " (loading…)" } else { "" };
+    let loading_suffix = if app.blobs_loading {
+        " (loading…)"
+    } else {
+        ""
+    };
     let pubkey_label = app
         .pubkey
         .as_deref()
@@ -551,20 +576,13 @@ fn draw_blobs_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|b| {
             let sha = if b.sha256.len() > 20 {
-                format!(
-                    "{}…{}",
-                    &b.sha256[..16],
-                    &b.sha256[b.sha256.len() - 4..]
-                )
+                format!("{}…{}", &b.sha256[..16], &b.sha256[b.sha256.len() - 4..])
             } else {
                 b.sha256.clone()
             };
             let size = format_size(b.size);
             let ctype = b.content_type.clone().unwrap_or_else(|| "—".into());
-            let uploaded = b
-                .uploaded
-                .map(format_unix_ts)
-                .unwrap_or_else(|| "—".into());
+            let uploaded = b.uploaded.map(format_unix_ts).unwrap_or_else(|| "—".into());
 
             Row::new(vec![
                 Cell::from(sha),
@@ -613,7 +631,9 @@ fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
 
     // File path input field
     let input_border_style = if app.input_mode {
-        Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(COLOR_ACCENT)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -711,7 +731,11 @@ fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_status_tab(f: &mut Frame, app: &App, area: Rect) {
-    let loading_suffix = if app.status_loading { " (loading…)" } else { "" };
+    let loading_suffix = if app.status_loading {
+        " (loading…)"
+    } else {
+        ""
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" Status — {}{loading_suffix} ", app.server))
@@ -853,7 +877,9 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
     f.render_widget(Clear, popup_area);
 
     let y = Style::default().fg(Color::Yellow);
-    let h = Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD);
+    let h = Style::default()
+        .fg(COLOR_ACCENT)
+        .add_modifier(Modifier::BOLD);
 
     let lines = vec![
         Line::from(Span::styled("  Global", h)),
@@ -1167,8 +1193,7 @@ fn encode_nsec(hex_key: &str) -> Result<String, String> {
 /// Decode a secret key from hex or `nsec1` bech32.
 fn decode_secret_key(input: &str) -> Result<String, String> {
     if input.starts_with("nsec1") {
-        let (hrp, data) =
-            bech32::decode(input).map_err(|e| format!("invalid nsec1: {e}"))?;
+        let (hrp, data) = bech32::decode(input).map_err(|e| format!("invalid nsec1: {e}"))?;
         if hrp.as_str() != "nsec" {
             return Err(format!("expected nsec hrp, got {hrp}"));
         }

@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
 # macos-runner.sh — Install and configure a GitHub Actions self-hosted runner
-# for the gnostr-org organization with the macos-15-intel label.
+# with the macos-15-intel label.
 #
 # Prerequisites:
 #   - gh CLI authenticated with an account that has org admin rights
 #   - macOS x86_64 (Intel)
 #
 # Usage:
-#   ./scripts/macos-runner.sh [install|start|stop|uninstall]
-#   Default action: install
+#   ./scripts/macos-runner.sh [options] [install|start|stop|status|uninstall]
+#
+# Options:
+#   --org <org>          GitHub organization (default: gnostr-org)
+#   --name <name>        Runner name (default: <hostname>-intel)
+#   --labels <labels>    Comma-separated runner labels
+#                        (default: self-hosted,macOS,X64,macos-15-intel)
+#   --dir <path>         Runner install directory (default: ~/actions-runner)
+#   --group <group>      Runner group (default: Default)
+#
+# Examples:
+#   ./scripts/macos-runner.sh --org my-org install
+#   ./scripts/macos-runner.sh --org my-org --name my-runner status
 
 set -euo pipefail
 
 RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner}"
-ORG="gnostr-org"
+ORG="${RUNNER_ORG:-gnostr-org}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname -s)-intel}"
 RUNNER_LABELS="self-hosted,macOS,X64,macos-15-intel"
 RUNNER_GROUP="Default"
@@ -22,9 +33,29 @@ RUNNER_GROUP="Default"
 info()  { echo "[info]  $*"; }
 error() { echo "[error] $*" >&2; exit 1; }
 
+usage() {
+    awk '/^# Usage:/,/^[^#]/' "$0" | grep '^#' | sed 's/^#[[:space:]]\{0,2\}//'
+    exit 0
+}
+
 require() {
     command -v "$1" &>/dev/null || error "'$1' is required but not found"
 }
+
+# ── argument parsing ──────────────────────────────────────────────────────────
+ACTION="install"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --org)    ORG="${2:?'--org requires a value'}";              shift 2 ;;
+        --name)   RUNNER_NAME="${2:?'--name requires a value'}";     shift 2 ;;
+        --labels) RUNNER_LABELS="${2:?'--labels requires a value'}"; shift 2 ;;
+        --dir)    RUNNER_DIR="${2:?'--dir requires a value'}";       shift 2 ;;
+        --group)  RUNNER_GROUP="${2:?'--group requires a value'}";   shift 2 ;;
+        --help|-h) usage ;;
+        install|start|stop|status|uninstall) ACTION="$1"; shift ;;
+        *) error "Unknown argument '$1'. Run with --help for usage." ;;
+    esac
+done
 
 latest_runner_url() {
     curl -fsSL https://api.github.com/repos/actions/runner/releases/latest \
@@ -112,7 +143,6 @@ cmd_uninstall() {
 }
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
-ACTION="${1:-install}"
 case "$ACTION" in
     install)   cmd_install   ;;
     start)     cmd_start     ;;

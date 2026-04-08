@@ -167,6 +167,8 @@ cmd_install() {
 
     if [[ -n "$REPO" && -f "$PARENT_ARCHIVE" ]]; then
         info "Reusing existing archive from parent: $PARENT_ARCHIVE"
+        echo "[warn]  If the runner version is stale, delete the cached archive and re-run:"
+        echo "[warn]    rm $PARENT_ARCHIVE"
         cp "$PARENT_ARCHIVE" "$ARCHIVE"
     else
         info "Downloading runner archive..."

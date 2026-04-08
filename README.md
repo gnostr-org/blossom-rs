@@ -127,7 +127,7 @@ let data = client.download(&desc.sha256).await?;
 | **NIP-96** | Implemented | `GET /.well-known/nostr/nip96.json`, `POST/GET/DELETE /n96` |
 | **NIP-98** | Implemented | kind:27235 HTTP auth (accepted alongside kind:24242) |
 | **BIP-340** | Implemented | Schnorr signature auth on all write operations |
-| **Admin** | Implemented | `GET/PUT/DELETE /admin/*` (stats, users, quotas, blobs) |
+| **Admin** | Implemented | `GET/PUT/DELETE /admin/*` (stats, users, quotas, blobs, LFS stats) |
 | **BUD-19** | Implemented | `POST/GET /lfs/{repo_id}/locks`, verify, unlock (`--enable-locks`) |
 | **S3-compat** | Implemented | `PUT/GET/HEAD/DELETE /:bucket/*key` (feature-gated) |
 | **Health** | Implemented | `GET /health` |

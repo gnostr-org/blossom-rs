@@ -1,5 +1,14 @@
 # Release Notes
 
+## v0.4.2
+
+### New Features
+
+- **`GET /admin/lfs-stats`** — Admin endpoint exposing LFS storage efficiency metrics: total original bytes vs stored bytes, savings percentage, and per-storage-type breakdown (raw, compressed, delta).
+- **`blossom-cli admin lfs-stats`** — CLI command to query LFS storage statistics from the server.
+
+---
+
 ## v0.4.1
 
 ### Bug Fixes

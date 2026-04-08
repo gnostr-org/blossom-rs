@@ -43,8 +43,9 @@ jobs:
       - run: cargo test --features iroh-transport --test iroh_integration
       - run: cargo clippy --workspace -- -D warnings
 
-  # Feature matrix — verifies key feature combinations compile cleanly.
+  # Feature matrix — verifies key feature combinations under pull requests.
   feature-matrix:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -42,3 +42,32 @@ jobs:
       - run: cargo test --workspace
       - run: cargo test --features iroh-transport --test iroh_integration
       - run: cargo clippy --workspace -- -D warnings
+
+  # Feature matrix — verifies key feature combinations compile cleanly.
+  feature-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: no-default
+            flags: --no-default-features
+          - label: client-only
+            flags: --no-default-features --features client
+          - label: client-filesystem
+            flags: --no-default-features --features client,filesystem
+          - label: lfs-only
+            flags: --no-default-features --features lfs
+          - label: server-only
+            flags: --no-default-features --features server
+          - label: default
+            flags: ""
+          - label: default-db-sqlite
+            flags: --features db-sqlite
+          - label: all-features
+            flags: --all-features
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo check (${{ matrix.label }})
+        run: cargo check ${{ matrix.flags }}

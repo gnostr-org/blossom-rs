@@ -36,6 +36,6 @@ pub mod pkarr_discovery;
 #[cfg(feature = "iroh-transport")]
 pub use iroh_client::IrohBlossomClient;
 #[cfg(feature = "iroh-transport")]
-pub use iroh_transport::{BlossomProtocol, IrohState, BLOSSOM_ALPN};
+pub use iroh_transport::{BlossomProtocol, BLOSSOM_ALPN};
 #[cfg(feature = "pkarr-discovery")]
 pub use pkarr_discovery::{PkarrConfig, PkarrPublisher};

@@ -13,10 +13,24 @@
 //! NIP-96 endpoints are available via the [`nip96`] submodule.
 
 pub mod admin;
+pub mod locks;
 pub mod nip96;
 
 use std::sync::Arc;
 
+use crate::access::{AccessControl, Action, OpenAccess, Role};
+use crate::auth::{verify_blossom_auth, verify_nip98_auth, AuthError};
+use crate::db::{BlobDatabase, DbError, MemoryDatabase, UploadRecord};
+use crate::lfs::{
+    compress, reconstruct_blob, LfsContext, LfsFileVersion, LfsStorageType, LfsVersionDatabase,
+};
+use crate::locks::LockDatabase;
+use crate::media::MediaProcessor;
+use crate::protocol::{base64url_decode, BlobDescriptor, NostrEvent};
+use crate::ratelimit::RateLimiter;
+use crate::stats::StatsAccumulator;
+use crate::storage::BlobBackend;
+use crate::webhooks::{self, EventType, NoopNotifier, WebhookNotifier};
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -27,16 +41,6 @@ use axum::{
 };
 use tokio::sync::Mutex;
 use tracing::{info, instrument, warn};
-
-use crate::access::{AccessControl, Action, OpenAccess, Role};
-use crate::auth::{verify_blossom_auth, verify_nip98_auth, AuthError};
-use crate::db::{BlobDatabase, DbError, MemoryDatabase, UploadRecord};
-use crate::media::MediaProcessor;
-use crate::protocol::{base64url_decode, BlobDescriptor, NostrEvent};
-use crate::ratelimit::RateLimiter;
-use crate::stats::StatsAccumulator;
-use crate::storage::BlobBackend;
-use crate::webhooks::{self, EventType, NoopNotifier, WebhookNotifier};
 
 /// Shared server state wrapping a blob backend.
 pub type SharedState = Arc<Mutex<ServerState>>;
@@ -56,17 +60,27 @@ pub struct UploadRequirements {
 
 /// Internal server state.
 pub struct ServerState {
-    backend: Box<dyn BlobBackend>,
-    database: Box<dyn BlobDatabase>,
-    access: Box<dyn AccessControl>,
+    pub(crate) backend: Box<dyn BlobBackend>,
+    pub(crate) database: Box<dyn BlobDatabase>,
+    pub(crate) access: Box<dyn AccessControl>,
     /// Live whitelist handle for runtime add/remove (if whitelist is in use).
     pub whitelist: Option<Arc<crate::access::Whitelist>>,
-    stats: StatsAccumulator,
-    rate_limiter: Option<RateLimiter>,
-    notifier: Box<dyn WebhookNotifier>,
-    media_processor: Option<Box<dyn MediaProcessor>>,
-    base_url: String,
-    requirements: UploadRequirements,
+    pub(crate) stats: StatsAccumulator,
+    pub(crate) rate_limiter: Option<RateLimiter>,
+    pub(crate) notifier: Box<dyn WebhookNotifier>,
+    pub(crate) media_processor: Option<Box<dyn MediaProcessor>>,
+    pub(crate) base_url: String,
+    pub(crate) requirements: UploadRequirements,
+    pub lock_db: Option<Box<dyn LockDatabase>>,
+    pub lfs_version_db: Option<Box<dyn LfsVersionDatabase>>,
+}
+
+impl std::fmt::Debug for ServerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerState")
+            .field("base_url", &self.base_url)
+            .finish()
+    }
 }
 
 impl ServerState {
@@ -98,6 +112,8 @@ pub struct BlobServerBuilder {
     rate_limiter: Option<RateLimiter>,
     notifier: Option<Box<dyn WebhookNotifier>>,
     media_processor: Option<Box<dyn MediaProcessor>>,
+    lock_db: Option<Box<dyn LockDatabase>>,
+    lfs_version_db: Option<Box<dyn LfsVersionDatabase>>,
 }
 
 impl BlobServerBuilder {
@@ -176,8 +192,24 @@ impl BlobServerBuilder {
         self
     }
 
+    /// Set a lock database for LFS file locking (BUD-19).
+    /// When set, lock API endpoints are mounted. When unset, lock endpoints
+    /// return 404 (Git LFS treats this as "locking unsupported").
+    pub fn lock_database(mut self, db: impl LockDatabase + 'static) -> Self {
+        self.lock_db = Some(Box::new(db));
+        self
+    }
+
+    /// Set an LFS version database for compression and delta encoding (BUD-20).
+    /// When set, LFS-tagged uploads are compressed and delta-encoded.
+    pub fn lfs_version_database(mut self, db: impl LfsVersionDatabase + 'static) -> Self {
+        self.lfs_version_db = Some(Box::new(db));
+        self
+    }
+
     /// Build the BlobServer.
     pub fn build(self) -> BlobServer {
+        let has_locks = self.lock_db.is_some();
         let state = Arc::new(Mutex::new(ServerState {
             backend: self.backend,
             database: self
@@ -191,10 +223,13 @@ impl BlobServerBuilder {
             media_processor: self.media_processor,
             base_url: self.base_url,
             requirements: self.requirements,
+            lock_db: self.lock_db,
+            lfs_version_db: self.lfs_version_db,
         }));
         BlobServer {
             state,
             body_limit: self.body_limit,
+            has_locks,
         }
     }
 }
@@ -222,6 +257,7 @@ impl BlobServerBuilder {
 pub struct BlobServer {
     state: SharedState,
     body_limit: usize,
+    has_locks: bool,
 }
 
 impl BlobServer {
@@ -250,6 +286,8 @@ impl BlobServer {
             rate_limiter: None,
             notifier: None,
             media_processor: None,
+            lock_db: None,
+            lfs_version_db: None,
         }
     }
 
@@ -267,7 +305,7 @@ impl BlobServer {
     /// spans with `http.method`, `http.route`, and `http.status_code` fields
     /// following OTEL semantic conventions.
     pub fn router(&self) -> Router {
-        Router::new()
+        let mut router = Router::new()
             .route("/upload", put(handle_upload))
             .route(
                 "/:sha256",
@@ -281,7 +319,13 @@ impl BlobServer {
             .route("/upload-requirements", get(handle_upload_requirements))
             .route("/status", get(handle_status))
             .route("/health", get(handle_health))
-            .with_state(self.state.clone())
+            .with_state(self.state.clone());
+
+        if self.has_locks {
+            router = router.merge(locks::locks_router(self.state.clone()));
+        }
+
+        router
             .layer(axum::extract::DefaultBodyLimit::max(self.body_limit))
             .layer(
                 tower_http::trace::TraceLayer::new_for_http()
@@ -309,6 +353,44 @@ impl BlobServer {
                         },
                     ),
             )
+    }
+
+    /// Spawn an iroh P2P transport sharing this server's state.
+    ///
+    /// Returns the iroh endpoint address and the iroh router handle.
+    /// Both HTTP and iroh transports share the same backend, database,
+    /// lock DB, and LFS version DB.
+    #[cfg(feature = "iroh-transport")]
+    pub async fn spawn_iroh(
+        &self,
+    ) -> Result<
+        (iroh::EndpointAddr, iroh::protocol::Router),
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        use crate::transport::{BlossomProtocol, BLOSSOM_ALPN};
+        use std::sync::Arc;
+
+        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+            .bind()
+            .await
+            .map_err(|e| format!("iroh bind: {e}"))?;
+
+        let addr = endpoint.addr();
+
+        let router = iroh::protocol::Router::builder(endpoint)
+            .accept(
+                BLOSSOM_ALPN,
+                Arc::new(BlossomProtocol::new(self.state.clone())),
+            )
+            .spawn();
+
+        tracing::info!(
+            iroh.node_id = %addr.id,
+            "iroh P2P transport spawned — connect with: iroh://{}",
+            addr.id,
+        );
+
+        Ok((addr, router))
     }
 }
 
@@ -481,15 +563,130 @@ async fn handle_upload(
     // Detect Content-Type before moving data into backend.
     let content_type = extract_content_type(&headers).unwrap_or_else(|| detect_mime(&data));
 
-    let base_url = s.base_url.clone();
-    let size = data.len() as u64;
-    let descriptor = {
-        let mut cursor = std::io::Cursor::new(data);
-        match s.backend.insert_stream(&mut cursor, size, &base_url) {
-            Ok(desc) => desc,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, error_json(&e)),
+    // Compute SHA-256 of original data (content identity).
+    let original_sha256 = crate::protocol::sha256_hex(&data);
+    let original_size = data.len() as u64;
+
+    // Parse LFS context from auth event tags.
+    let lfs_ctx = extract_auth_event(&headers)
+        .map(|e| LfsContext::from_event(&e))
+        .unwrap_or_default();
+
+    // BUD-20: LFS compression/delta pipeline.
+    let (stored_data, storage_type, base_sha256) = if let Some(ref lfs_db) = s.lfs_version_db {
+        if lfs_ctx.is_lfs && !lfs_ctx.is_manifest {
+            if let Some(ref base_hash) = lfs_ctx.base {
+                let (base_version, base_data) = {
+                    let bv = lfs_db.get_by_sha256(base_hash).ok().flatten();
+                    let bd = s.backend.get(base_hash);
+                    (bv, bd)
+                };
+
+                if let (Some(base_version), Some(base_data)) = (base_version, base_data) {
+                    let base_decompressed = match base_version.storage {
+                        LfsStorageType::Compressed => {
+                            compress::decompress(&base_data).unwrap_or_else(|_| base_data.clone())
+                        }
+                        LfsStorageType::Delta => {
+                            reconstruct_blob(&base_version, lfs_db.as_ref(), &*s.backend)
+                                .unwrap_or_else(|_| base_data.clone())
+                        }
+                        _ => base_data.clone(),
+                    };
+
+                    match compress::encode_delta(&base_decompressed, &data) {
+                        Ok(delta) if compress::delta_is_worthwhile(delta.len(), data.len()) => {
+                            match compress::compress(&delta) {
+                                Ok(compressed_delta) => {
+                                    info!(
+                                        blob.sha256 = %original_sha256,
+                                        lfs.storage = "delta",
+                                        lfs.base = %base_hash,
+                                        lfs.delta_bytes = delta.len(),
+                                        lfs.compressed_bytes = compressed_delta.len(),
+                                        lfs.original_bytes = original_size,
+                                        "LFS delta stored"
+                                    );
+                                    (
+                                        compressed_delta,
+                                        LfsStorageType::Delta,
+                                        Some(base_hash.clone()),
+                                    )
+                                }
+                                Err(_) => {
+                                    let compressed =
+                                        compress::compress(&data).unwrap_or_else(|_| data.clone());
+                                    (compressed, LfsStorageType::Compressed, None)
+                                }
+                            }
+                        }
+                        _ => {
+                            let compressed =
+                                compress::compress(&data).unwrap_or_else(|_| data.clone());
+                            (compressed, LfsStorageType::Compressed, None)
+                        }
+                    }
+                } else {
+                    let compressed = compress::compress(&data).unwrap_or_else(|_| data.clone());
+                    (compressed, LfsStorageType::Compressed, None)
+                }
+            } else {
+                let compressed = compress::compress(&data).unwrap_or_else(|_| data.clone());
+                (compressed, LfsStorageType::Compressed, None)
+            }
+        } else {
+            (data.clone(), LfsStorageType::Raw, None)
         }
+    } else {
+        (data.clone(), LfsStorageType::Raw, None)
     };
+
+    let base_url = s.base_url.clone();
+    let descriptor = {
+        let desc =
+            crate::storage::make_descriptor_from_hash(&original_sha256, original_size, &base_url);
+        if !s.backend.exists(&original_sha256) {
+            s.backend
+                .insert_with_hash(stored_data, &original_sha256, original_size, &base_url);
+        }
+        desc
+    };
+
+    // Record LFS version if applicable.
+    if let Some(ref mut lfs_db) = s.lfs_version_db {
+        if lfs_ctx.is_lfs {
+            if let (Some(repo), Some(path)) = (&lfs_ctx.repo, &lfs_ctx.path) {
+                let next_version = lfs_db
+                    .get_latest_version(repo, path)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.version + 1)
+                    .unwrap_or(1);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+
+                let record = LfsFileVersion {
+                    repo_id: repo.clone(),
+                    path: path.clone(),
+                    version: next_version,
+                    sha256: original_sha256.clone(),
+                    base_sha256: base_sha256.clone(),
+                    storage: storage_type.clone(),
+                    delta_algo: if storage_type == LfsStorageType::Delta {
+                        Some("xdelta3".into())
+                    } else {
+                        None
+                    },
+                    original_size: original_size as i64,
+                    stored_size: descriptor.size as i64,
+                    created_at: now,
+                };
+                let _ = lfs_db.record_version(&record);
+            }
+        }
+    }
 
     // Record span fields now that we know the sha256.
     tracing::Span::current().record("blob.sha256", descriptor.sha256.as_str());
@@ -534,16 +731,37 @@ async fn handle_get_blob(
     State(state): State<SharedState>,
     Path(sha256): Path<String>,
 ) -> impl IntoResponse {
-    // Strip optional file extension (BUD-01: GET /<sha256>.ext).
     let sha256 = sha256.split('.').next().unwrap_or(&sha256).to_string();
     if !is_valid_sha256(&sha256) {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let s = state.lock().await;
     match s.backend.get(&sha256) {
-        Some(data) => {
+        Some(raw_data) => {
+            let data = if let Some(ref lfs_db) = s.lfs_version_db {
+                if let Ok(Some(version)) = lfs_db.get_by_sha256(&sha256) {
+                    match version.storage {
+                        LfsStorageType::Compressed => {
+                            compress::decompress(&raw_data).unwrap_or(raw_data)
+                        }
+                        LfsStorageType::Delta => {
+                            match reconstruct_blob(&version, &**lfs_db, &*s.backend) {
+                                Ok(reconstructed) => reconstructed,
+                                Err(e) => {
+                                    warn!(blob.sha256 = %sha256, error.message = %e, "delta reconstruction failed");
+                                    raw_data
+                                }
+                            }
+                        }
+                        _ => raw_data,
+                    }
+                } else {
+                    raw_data
+                }
+            } else {
+                raw_data
+            };
             let size = data.len() as u64;
-            // Record access stats.
             s.stats.record_access(&sha256, size);
             (
                 StatusCode::OK,
@@ -567,8 +785,18 @@ async fn handle_head_blob(
     }
     let s = state.lock().await;
     match s.backend.get(&sha256) {
-        Some(data) => {
-            let size = data.len();
+        Some(_) => {
+            let content_length = if let Some(ref lfs_db) = s.lfs_version_db {
+                lfs_db
+                    .get_by_sha256(&sha256)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.original_size as usize)
+            } else {
+                None
+            };
+            let size = content_length
+                .unwrap_or_else(|| s.backend.get(&sha256).map(|d| d.len()).unwrap_or(0));
             (
                 StatusCode::OK,
                 [
@@ -614,8 +842,51 @@ async fn handle_delete_blob(
                     }
                 }
             }
+            let base_url_clone = s.base_url.clone();
+            let deltas_to_rebase = s
+                .lfs_version_db
+                .as_ref()
+                .and_then(|lfs_db| lfs_db.get_deltas_for_base(&sha256).ok());
+
+            if let Some(ref deltas) = deltas_to_rebase {
+                for delta_version in deltas {
+                    let base_decompressed_opt = {
+                        let lfs_db = s.lfs_version_db.as_ref().unwrap();
+                        s.backend
+                            .get(&delta_version.sha256)
+                            .and_then(|_delta_data| {
+                                reconstruct_blob(delta_version, lfs_db.as_ref(), &*s.backend).ok()
+                            })
+                    };
+
+                    if let Some(base_decompressed) = base_decompressed_opt {
+                        let compressed = compress::compress(&base_decompressed)
+                            .unwrap_or_else(|_| base_decompressed.clone());
+                        s.backend.insert_with_hash(
+                            compressed,
+                            &delta_version.sha256,
+                            delta_version.original_size as u64,
+                            &base_url_clone,
+                        );
+                        if let Some(ref mut lfs_db) = s.lfs_version_db {
+                            let _ = lfs_db.update_version(
+                                &delta_version.sha256,
+                                LfsStorageType::Compressed,
+                                None,
+                                base_decompressed.len() as i64,
+                            );
+                        }
+                    }
+                }
+            }
+
             if s.backend.delete(&sha256) {
                 let _ = s.database.delete_upload(&sha256);
+
+                if let Some(ref mut lfs_db) = s.lfs_version_db {
+                    let _ = lfs_db.delete_by_sha256(&sha256);
+                }
+
                 s.notifier.notify(webhooks::make_payload(
                     EventType::Delete,
                     &sha256,

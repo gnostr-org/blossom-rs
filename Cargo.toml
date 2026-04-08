@@ -3,7 +3,7 @@ members = [".", "blossom-server", "blossom-cli", "xtask"]
 
 [package]
 name = "blossom-rs"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Full-featured Blossom (BUD-01) blob storage library for Rust — embeddable server, async client, BIP-340 Nostr auth"
@@ -65,6 +65,9 @@ tracing = "0.1"
 # Error handling
 thiserror = "2"
 
+# UUID generation for lock IDs
+uuid = { version = "1", features = ["v4"] }
+
 # Server (optional)
 axum = { version = "0.7", features = ["ws"], optional = true }
 axum-extra = { version = "0.9", optional = true }
@@ -107,6 +110,8 @@ pkarr = { version = "6.0.0-rc.0", default-features = false, features = ["relays"
 
 # Statistics
 dashmap = "6"
+zstd = "0.13.3"
+xdelta3 = "0.1.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -114,3 +119,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "htt
 rand = "0.8"
 tempfile = "3"
 proptest = "1"
+serial_test = "3"

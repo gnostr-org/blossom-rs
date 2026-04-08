@@ -15,7 +15,7 @@ use blossom_rs::ratelimit::{RateLimitConfig, RateLimiter};
 use blossom_rs::server::admin::admin_router;
 use blossom_rs::server::nip96::nip96_router;
 use blossom_rs::server::SharedState;
-use blossom_rs::transport::{BlossomProtocol, IrohState, BLOSSOM_ALPN};
+use blossom_rs::transport::{BlossomProtocol, BLOSSOM_ALPN};
 use blossom_rs::webhooks::HttpNotifier;
 use blossom_rs::{BlobServer, BlossomSigner, FilesystemBackend, MemoryBackend, Signer};
 use clap::Parser;
@@ -383,33 +383,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             key
         };
 
-        // Build iroh state — shares the same filesystem directory as HTTP.
-        // For MemoryBackend, creates a shared instance. For FilesystemBackend,
-        // both transports point at the same directory (content-addressed = shared).
-        let iroh_state = StdArc::new(tokio::sync::Mutex::new(IrohState {
-            backend: if args.memory {
-                // For memory mode, blobs uploaded via iroh won't be visible via HTTP
-                // and vice versa. Use filesystem mode for shared storage.
-                warn!("--memory mode: iroh and HTTP have separate blob stores. Use filesystem for shared storage.");
-                Box::new(MemoryBackend::new())
-            } else {
-                Box::new(
-                    FilesystemBackend::new(&args.data_dir)
-                        .map_err(|e| format!("iroh backend: {e}"))?,
-                )
-            },
-            database: Box::new(MemoryDatabase::new()),
-            access: if let Some(ref wl_path) = args.whitelist {
-                let wl = Whitelist::from_file(wl_path)?;
-                Box::new(Arc::new(wl))
-            } else {
-                Box::new(blossom_rs::access::OpenAccess)
-            },
-            base_url: args.base_url.clone(),
-            max_upload_size: args.max_upload_size,
-            require_auth: args.require_auth,
-        }));
-
         let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
             .secret_key(secret_key)
             .bind()
@@ -423,8 +396,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             node_id,
         );
 
+        // Share the same SharedState — both transports see the same backend,
+        // database, lock DB, and LFS version DB.
         let router = IrohRouter::builder(endpoint)
-            .accept(BLOSSOM_ALPN, StdArc::new(BlossomProtocol::new(iroh_state)))
+            .accept(
+                BLOSSOM_ALPN,
+                StdArc::new(BlossomProtocol::new(state.clone())),
+            )
             .spawn();
 
         Some(router)

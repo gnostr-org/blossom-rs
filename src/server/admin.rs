@@ -382,7 +382,7 @@ async fn handle_whitelist_remove(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::access::{AccessControl, Action, Whitelist};
+    use crate::access::Whitelist;
     use crate::auth::{auth_header_value, build_blossom_auth, Signer};
     use crate::db::MemoryDatabase;
     use crate::server::nip96::nip96_router;

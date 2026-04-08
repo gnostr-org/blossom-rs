@@ -19,36 +19,55 @@
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol operation codes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Op {
+    #[default]
     Get,
     Head,
     Upload,
     Delete,
     List,
+    LockCreate,
+    LockDelete,
+    LockList,
+    LockVerify,
 }
 
 /// Request frame sent over a QUIC stream.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Request {
-    /// Operation type.
     pub op: Op,
-    /// SHA256 hash (for GET/HEAD/DELETE). Empty for UPLOAD.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sha256: String,
-    /// Public key for LIST operations.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pubkey: String,
-    /// Auth header value (e.g., "Nostr base64...").
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub auth: String,
-    /// Content type for UPLOAD.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content_type: String,
-    /// Body length for UPLOAD (bytes following the JSON line).
     #[serde(default)]
     pub body_len: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repo_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lock_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lock_path: String,
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cursor: String,
+    #[serde(default)]
+    pub limit: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lfs_path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lfs_repo: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lfs_base: String,
+    #[serde(default)]
+    pub lfs_manifest: bool,
 }
 
 /// Response status.
@@ -59,6 +78,7 @@ pub enum Status {
     NotFound,
     Unauthorized,
     Forbidden,
+    Conflict,
     Error,
 }
 
@@ -121,6 +141,16 @@ mod tests {
             auth: "Nostr abc123".into(),
             content_type: String::new(),
             body_len: 0,
+            repo_id: String::new(),
+            lock_id: String::new(),
+            lock_path: String::new(),
+            force: false,
+            cursor: String::new(),
+            limit: 0,
+            lfs_path: String::new(),
+            lfs_repo: String::new(),
+            lfs_base: String::new(),
+            lfs_manifest: false,
         };
         let encoded = encode_request(&req);
         assert!(encoded.ends_with(b"\n"));
@@ -155,6 +185,16 @@ mod tests {
             auth: "Nostr xyz".into(),
             content_type: "application/octet-stream".into(),
             body_len: 5000,
+            repo_id: String::new(),
+            lock_id: String::new(),
+            lock_path: String::new(),
+            force: false,
+            cursor: String::new(),
+            limit: 0,
+            lfs_path: String::new(),
+            lfs_repo: String::new(),
+            lfs_base: String::new(),
+            lfs_manifest: false,
         };
         let encoded = encode_request(&req);
         let (decoded, _): (Request, usize) = decode_line(&encoded).unwrap();
@@ -187,6 +227,16 @@ mod tests {
             auth: "Nostr list_auth".into(),
             content_type: String::new(),
             body_len: 0,
+            repo_id: String::new(),
+            lock_id: String::new(),
+            lock_path: String::new(),
+            force: false,
+            cursor: String::new(),
+            limit: 0,
+            lfs_path: String::new(),
+            lfs_repo: String::new(),
+            lfs_base: String::new(),
+            lfs_manifest: false,
         };
         let encoded = encode_request(&req);
         let (decoded, _): (Request, usize) = decode_line(&encoded).unwrap();

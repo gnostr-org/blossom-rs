@@ -5,6 +5,22 @@
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 use super::{BlobDatabase, DbError, FileStats, UploadRecord, UserRecord};
+use crate::lfs::{
+    LfsFileVersion, LfsStorageStats, LfsStorageType, LfsVersionDatabase, LfsVersionError,
+};
+
+type VersionRow = (
+    String,
+    String,
+    i64,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+);
 
 /// SQLite-backed metadata database.
 ///
@@ -31,7 +47,7 @@ impl SqliteDatabase {
     }
 
     /// Current schema version. Bump this when adding new migrations.
-    const SCHEMA_VERSION: i64 = 3;
+    const SCHEMA_VERSION: i64 = 4;
 
     async fn run_migrations(&self) -> Result<(), DbError> {
         // Create version tracking table.
@@ -58,6 +74,10 @@ impl SqliteDatabase {
         }
         if current < 3 {
             self.migrate_v3().await?;
+        }
+
+        if current < 4 {
+            self.migrate_v4().await?;
         }
 
         if current < Self::SCHEMA_VERSION {
@@ -166,6 +186,47 @@ impl SqliteDatabase {
                 .await
                 .map_err(|e| DbError::Internal(format!("v3 migration: {e}")))?;
         }
+
+        Ok(())
+    }
+
+    /// V4: LFS file versions table (BUD-20).
+    async fn migrate_v4(&self) -> Result<(), DbError> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS lfs_file_versions (
+                repo_id       TEXT NOT NULL,
+                path          TEXT NOT NULL,
+                version       INTEGER NOT NULL,
+                sha256        TEXT NOT NULL,
+                base_sha256   TEXT,
+                storage       TEXT NOT NULL DEFAULT 'full',
+                delta_algo    TEXT,
+                original_size INTEGER NOT NULL,
+                stored_size   INTEGER NOT NULL,
+                created_at    INTEGER NOT NULL,
+                PRIMARY KEY (repo_id, path, version)
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DbError::Internal(format!("v4 migration: {e}")))?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_lfs_v_sha ON lfs_file_versions(sha256)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DbError::Internal(format!("v4 migration: {e}")))?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_lfs_v_base ON lfs_file_versions(base_sha256)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DbError::Internal(format!("v4 migration: {e}")))?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_lfs_v_repo_path ON lfs_file_versions(repo_id, path)",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DbError::Internal(format!("v4 migration: {e}")))?;
 
         Ok(())
     }
@@ -484,5 +545,177 @@ impl BlobDatabase for SqliteDatabase {
                 })
                 .collect())
         })
+    }
+}
+
+impl LfsVersionDatabase for SqliteDatabase {
+    fn record_version(&mut self, record: &LfsFileVersion) -> Result<i64, LfsVersionError> {
+        Self::block_on(async {
+            sqlx::query(
+                "INSERT INTO lfs_file_versions (repo_id, path, version, sha256, base_sha256, storage, delta_algo, original_size, stored_size, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&record.repo_id)
+            .bind(&record.path)
+            .bind(record.version)
+            .bind(&record.sha256)
+            .bind(&record.base_sha256)
+            .bind(record.storage.to_string())
+            .bind(&record.delta_algo)
+            .bind(record.original_size)
+            .bind(record.stored_size)
+            .bind(record.created_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| LfsVersionError::Internal(format!("insert version: {e}")))?;
+            Ok(record.version)
+        })
+    }
+
+    fn get_by_sha256(&self, sha256: &str) -> Result<Option<LfsFileVersion>, LfsVersionError> {
+        Self::block_on(async {
+            let row: Option<VersionRow> =
+                sqlx::query_as(
+                    "SELECT repo_id, path, version, sha256, base_sha256, storage, delta_algo, original_size, stored_size, created_at
+                     FROM lfs_file_versions WHERE sha256 = ?",
+                )
+                .bind(sha256)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| LfsVersionError::Internal(format!("get by sha256: {e}")))?;
+
+            Ok(row.map(row_to_version))
+        })
+    }
+
+    fn get_latest_version(
+        &self,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<Option<LfsFileVersion>, LfsVersionError> {
+        Self::block_on(async {
+            let row: Option<VersionRow> =
+                sqlx::query_as(
+                    "SELECT repo_id, path, version, sha256, base_sha256, storage, delta_algo, original_size, stored_size, created_at
+                     FROM lfs_file_versions WHERE repo_id = ? AND path = ? ORDER BY version DESC LIMIT 1",
+                )
+                .bind(repo_id)
+                .bind(path)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| LfsVersionError::Internal(format!("get latest: {e}")))?;
+
+            Ok(row.map(row_to_version))
+        })
+    }
+
+    fn delete_by_sha256(&mut self, sha256: &str) -> Result<(), LfsVersionError> {
+        Self::block_on(async {
+            sqlx::query("DELETE FROM lfs_file_versions WHERE sha256 = ?")
+                .bind(sha256)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| LfsVersionError::Internal(format!("delete version: {e}")))?;
+            Ok(())
+        })
+    }
+
+    fn get_deltas_for_base(
+        &self,
+        base_sha256: &str,
+    ) -> Result<Vec<LfsFileVersion>, LfsVersionError> {
+        Self::block_on(async {
+            let rows: Vec<VersionRow> =
+                sqlx::query_as(
+                    "SELECT repo_id, path, version, sha256, base_sha256, storage, delta_algo, original_size, stored_size, created_at
+                     FROM lfs_file_versions WHERE base_sha256 = ? AND storage = 'delta'",
+                )
+                .bind(base_sha256)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| LfsVersionError::Internal(format!("get deltas: {e}")))?;
+
+            Ok(rows.into_iter().map(row_to_version).collect())
+        })
+    }
+
+    fn update_version(
+        &mut self,
+        sha256: &str,
+        storage: LfsStorageType,
+        base_sha256: Option<&str>,
+        stored_size: i64,
+    ) -> Result<(), LfsVersionError> {
+        Self::block_on(async {
+            sqlx::query(
+                "UPDATE lfs_file_versions SET storage = ?, base_sha256 = ?, stored_size = ? WHERE sha256 = ?",
+            )
+            .bind(storage.to_string())
+            .bind(base_sha256)
+            .bind(stored_size)
+            .bind(sha256)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| LfsVersionError::Internal(format!("update version: {e}")))?;
+            Ok(())
+        })
+    }
+
+    fn lfs_stats(&self) -> Result<LfsStorageStats, LfsVersionError> {
+        Self::block_on(async {
+            let total: (i64, i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*), COALESCE(SUM(original_size), 0), COALESCE(SUM(stored_size), 0) FROM lfs_file_versions",
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| LfsVersionError::Internal(format!("stats: {e}")))?;
+
+            let by_type: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+                "SELECT storage, COUNT(*), COALESCE(SUM(original_size), 0), COALESCE(SUM(stored_size), 0)
+                 FROM lfs_file_versions GROUP BY storage",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| LfsVersionError::Internal(format!("stats by type: {e}")))?;
+
+            use std::collections::HashMap;
+            let mut by_storage_type = HashMap::new();
+            for (storage, count, orig, stored) in by_type {
+                by_storage_type.insert(
+                    storage,
+                    crate::lfs::LfsStorageTypeStats {
+                        count,
+                        original_bytes: orig,
+                        stored_bytes: stored,
+                    },
+                );
+            }
+
+            Ok(LfsStorageStats {
+                total_versions: total.0,
+                total_original_bytes: total.1,
+                total_stored_bytes: total.2,
+                by_storage_type,
+            })
+        })
+    }
+}
+
+fn row_to_version(r: VersionRow) -> LfsFileVersion {
+    LfsFileVersion {
+        repo_id: r.0,
+        path: r.1,
+        version: r.2,
+        sha256: r.3,
+        base_sha256: r.4,
+        storage: match r.5.as_str() {
+            "compressed" => LfsStorageType::Compressed,
+            "delta" => LfsStorageType::Delta,
+            _ => LfsStorageType::Raw,
+        },
+        delta_algo: r.6,
+        original_size: r.7,
+        stored_size: r.8,
+        created_at: r.9,
     }
 }

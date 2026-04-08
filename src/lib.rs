@@ -42,6 +42,8 @@ pub mod auth;
 pub mod db;
 pub mod integrity;
 pub mod labels;
+pub mod lfs;
+pub mod locks;
 pub mod media;
 pub mod otel;
 pub mod protocol;
@@ -60,9 +62,17 @@ pub mod client;
 
 // Re-exports for convenience.
 pub use access::{AccessControl, Role, RoleBasedAccess};
-pub use auth::{BlossomSigner, Signer};
+pub use auth::{
+    auth_header_value, build_blossom_auth, build_blossom_auth_with_extra_tags, BlossomSigner,
+    Signer,
+};
 pub use db::{BlobDatabase, MemoryDatabase};
 pub use labels::{MediaLabeler, NoopLabeler};
+pub use lfs::{
+    compress, LfsContext, LfsFileVersion, LfsStorageStats, LfsStorageType, LfsVersionDatabase,
+    LfsVersionError, MemoryLfsVersionDatabase,
+};
+pub use locks::{LockDatabase, LockError, LockFilters, LockRecord, MemoryLockDatabase};
 pub use media::{MediaProcessor, PassthroughProcessor};
 pub use protocol::{BlobDescriptor, NostrEvent};
 pub use storage::{BlobBackend, MemoryBackend};

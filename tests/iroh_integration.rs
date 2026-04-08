@@ -7,32 +7,21 @@
 
 use std::sync::Arc;
 
-use blossom_rs::access::OpenAccess;
 use blossom_rs::auth::Signer;
-use blossom_rs::db::MemoryDatabase;
 use blossom_rs::locks::MemoryLockDatabase;
 use blossom_rs::protocol::sha256_hex;
 use blossom_rs::storage::MemoryBackend;
-use blossom_rs::transport::{BlossomProtocol, IrohBlossomClient, IrohState, BLOSSOM_ALPN};
+use blossom_rs::transport::{BlossomProtocol, IrohBlossomClient, BLOSSOM_ALPN};
+use blossom_rs::BlobServer;
 use blossom_rs::BlossomSigner;
 use iroh::endpoint::presets::N0;
 use iroh::protocol::Router;
 use iroh::EndpointAddr;
 use serial_test::serial;
-use tokio::sync::Mutex;
 
-/// Spawn an iroh server node and return its addr + router handle.
 async fn spawn_iroh_server() -> (EndpointAddr, Router) {
-    let state = Arc::new(Mutex::new(IrohState {
-        backend: Box::new(MemoryBackend::new()),
-        database: Box::new(MemoryDatabase::new()),
-        access: Box::new(OpenAccess),
-        base_url: "iroh://test".to_string(),
-        max_upload_size: None,
-        require_auth: false,
-        lock_db: None,
-        lfs_version_db: None,
-    }));
+    let server = BlobServer::new(MemoryBackend::new(), "iroh://test");
+    let state = server.shared_state();
 
     let endpoint = iroh::Endpoint::builder(N0)
         .bind()
@@ -45,24 +34,16 @@ async fn spawn_iroh_server() -> (EndpointAddr, Router) {
         .accept(BLOSSOM_ALPN, Arc::new(BlossomProtocol::new(state)))
         .spawn();
 
-    // Give the router a moment to start accepting.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     (addr, router)
 }
 
-/// Create an iroh client.
 async fn spawn_iroh_server_with_locks() -> (EndpointAddr, Router) {
-    let state = Arc::new(Mutex::new(IrohState {
-        backend: Box::new(MemoryBackend::new()),
-        database: Box::new(MemoryDatabase::new()),
-        access: Box::new(OpenAccess),
-        base_url: "iroh://test".to_string(),
-        max_upload_size: None,
-        require_auth: false,
-        lock_db: Some(Box::new(MemoryLockDatabase::new())),
-        lfs_version_db: None,
-    }));
+    let server = BlobServer::builder(MemoryBackend::new(), "iroh://test")
+        .lock_database(MemoryLockDatabase::new())
+        .build();
+    let state = server.shared_state();
 
     let endpoint = iroh::Endpoint::builder(N0)
         .bind()
@@ -214,16 +195,10 @@ async fn test_iroh_list() {
 }
 
 async fn spawn_iroh_lock_server() -> (EndpointAddr, Router) {
-    let state = Arc::new(Mutex::new(IrohState {
-        backend: Box::new(MemoryBackend::new()),
-        database: Box::new(MemoryDatabase::new()),
-        access: Box::new(OpenAccess),
-        base_url: "iroh://test".to_string(),
-        max_upload_size: None,
-        require_auth: false,
-        lock_db: Some(Box::new(MemoryLockDatabase::new())),
-        lfs_version_db: None,
-    }));
+    let server = BlobServer::builder(MemoryBackend::new(), "iroh://test")
+        .lock_database(MemoryLockDatabase::new())
+        .build();
+    let state = server.shared_state();
 
     let endpoint = iroh::Endpoint::builder(N0)
         .bind()

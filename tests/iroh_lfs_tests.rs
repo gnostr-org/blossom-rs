@@ -7,31 +7,23 @@
 
 use std::sync::Arc;
 
-use blossom_rs::access::OpenAccess;
 use blossom_rs::auth::Signer;
-use blossom_rs::db::MemoryDatabase;
 use blossom_rs::locks::MemoryLockDatabase;
 use blossom_rs::protocol::sha256_hex;
 use blossom_rs::storage::MemoryBackend;
-use blossom_rs::transport::{BlossomProtocol, IrohBlossomClient, IrohState, BLOSSOM_ALPN};
-use blossom_rs::MemoryLfsVersionDatabase;
+use blossom_rs::transport::{BlossomProtocol, IrohBlossomClient, BLOSSOM_ALPN};
+use blossom_rs::{BlobServer, MemoryLfsVersionDatabase};
 use iroh::endpoint::presets::N0;
 use iroh::protocol::Router;
 use iroh::EndpointAddr;
 use serial_test::serial;
-use tokio::sync::Mutex;
 
 async fn spawn_iroh_lfs_server() -> (EndpointAddr, Router) {
-    let state = Arc::new(Mutex::new(IrohState {
-        backend: Box::new(MemoryBackend::new()),
-        database: Box::new(MemoryDatabase::new()),
-        access: Box::new(OpenAccess),
-        base_url: "iroh://test".to_string(),
-        max_upload_size: None,
-        require_auth: false,
-        lock_db: Some(Box::new(MemoryLockDatabase::new())),
-        lfs_version_db: Some(Box::new(MemoryLfsVersionDatabase::new())),
-    }));
+    let server = BlobServer::builder(MemoryBackend::new(), "iroh://test")
+        .lock_database(MemoryLockDatabase::new())
+        .lfs_version_database(MemoryLfsVersionDatabase::new())
+        .build();
+    let state = server.shared_state();
 
     let endpoint = iroh::Endpoint::builder(N0)
         .bind()

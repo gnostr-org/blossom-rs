@@ -4,59 +4,37 @@
 //! iroh's QUIC-based P2P connections. Peers connect by node ID — no
 //! IP/DNS required.
 
-use std::sync::Arc;
-
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler};
-use tokio::sync::Mutex;
 use tracing::{info, instrument, warn};
 
 use super::wire::{self, Op, Request, Response, Status};
-use crate::access::{AccessControl, Action, Role};
+use crate::access::{Action, Role};
 use crate::auth::{verify_blossom_auth, verify_nip98_auth};
-use crate::db::{BlobDatabase, UploadRecord};
-use crate::lfs::{
-    compress, reconstruct_blob, LfsContext, LfsFileVersion, LfsStorageType, LfsVersionDatabase,
-};
-use crate::locks::{LockDatabase, LockFilters};
+use crate::db::UploadRecord;
+use crate::lfs::{compress, reconstruct_blob, LfsContext, LfsFileVersion, LfsStorageType};
+use crate::locks::LockFilters;
 use crate::protocol::{base64url_decode, BlobDescriptor, NostrEvent};
-use crate::storage::BlobBackend;
+use crate::server::{ServerState, SharedState};
 
 /// ALPN protocol identifier for Blossom over iroh.
 pub const BLOSSOM_ALPN: &[u8] = b"/blossom/1";
-
-/// Shared state for the iroh transport handler.
-pub struct IrohState {
-    pub backend: Box<dyn BlobBackend>,
-    pub database: Box<dyn BlobDatabase>,
-    pub access: Box<dyn AccessControl>,
-    pub base_url: String,
-    pub max_upload_size: Option<u64>,
-    pub require_auth: bool,
-    pub lock_db: Option<Box<dyn LockDatabase>>,
-    pub lfs_version_db: Option<Box<dyn LfsVersionDatabase>>,
-}
-
-impl std::fmt::Debug for IrohState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IrohState")
-            .field("base_url", &self.base_url)
-            .finish()
-    }
-}
 
 /// Blossom protocol handler for iroh connections.
 ///
 /// Each incoming connection spawns a loop that accepts bidirectional
 /// streams. Each stream carries one request + response.
+///
+/// Uses the same `SharedState` as the HTTP server, so both transports
+/// share a single backend, database, lock DB, and LFS version DB.
 #[derive(Debug, Clone)]
 pub struct BlossomProtocol {
-    state: Arc<Mutex<IrohState>>,
+    state: SharedState,
 }
 
 impl BlossomProtocol {
-    /// Create a new protocol handler with the given state.
-    pub fn new(state: Arc<Mutex<IrohState>>) -> Self {
+    /// Create a new protocol handler sharing the given `SharedState`.
+    pub fn new(state: SharedState) -> Self {
         Self { state }
     }
 }
@@ -90,7 +68,7 @@ impl ProtocolHandler for BlossomProtocol {
 async fn handle_stream(
     mut send: iroh::endpoint::SendStream,
     mut recv: iroh::endpoint::RecvStream,
-    state: Arc<Mutex<IrohState>>,
+    state: SharedState,
 ) {
     // Read the request JSON line.
     let mut buf = Vec::with_capacity(4096);
@@ -233,7 +211,7 @@ fn verify_auth(auth_header: &str, op: &Op) -> Result<String, String> {
     Ok(event.pubkey)
 }
 
-async fn handle_get(send: &mut iroh::endpoint::SendStream, sha256: &str, state: &IrohState) {
+async fn handle_get(send: &mut iroh::endpoint::SendStream, sha256: &str, state: &ServerState) {
     match state.backend.get(sha256) {
         Some(raw_data) => {
             let data = if let Some(ref lfs_db) = state.lfs_version_db {
@@ -286,7 +264,7 @@ async fn handle_get(send: &mut iroh::endpoint::SendStream, sha256: &str, state: 
     }
 }
 
-async fn handle_head(send: &mut iroh::endpoint::SendStream, sha256: &str, state: &IrohState) {
+async fn handle_head(send: &mut iroh::endpoint::SendStream, sha256: &str, state: &ServerState) {
     let exists = state.backend.exists(sha256);
     let status = if exists { Status::Ok } else { Status::NotFound };
     let original_size = if exists {
@@ -313,7 +291,7 @@ async fn handle_upload(
     data: Vec<u8>,
     req: &Request,
     auth_pubkey: Option<String>,
-    state: &mut IrohState,
+    state: &mut ServerState,
 ) {
     if data.is_empty() {
         let resp = Response {
@@ -327,7 +305,7 @@ async fn handle_upload(
         return;
     }
 
-    if state.require_auth && auth_pubkey.is_none() {
+    if state.requirements.require_auth && auth_pubkey.is_none() {
         let resp = Response {
             status: Status::Unauthorized,
             body_len: 0,
@@ -355,7 +333,7 @@ async fn handle_upload(
 
     let size = data.len() as u64;
 
-    if let Some(max) = state.max_upload_size {
+    if let Some(max) = state.requirements.max_size {
         if size > max {
             let resp = Response {
                 status: Status::Error,
@@ -533,7 +511,7 @@ async fn handle_delete(
     send: &mut iroh::endpoint::SendStream,
     sha256: &str,
     auth_pubkey: Option<String>,
-    state: &mut IrohState,
+    state: &mut ServerState,
 ) {
     let pubkey = match auth_pubkey {
         Some(pk) => pk,
@@ -647,7 +625,7 @@ async fn handle_delete(
     }
 }
 
-async fn handle_list(send: &mut iroh::endpoint::SendStream, pubkey: &str, state: &IrohState) {
+async fn handle_list(send: &mut iroh::endpoint::SendStream, pubkey: &str, state: &ServerState) {
     match state.database.list_uploads_by_pubkey(pubkey) {
         Ok(records) => {
             let descriptors: Vec<BlobDescriptor> = records
@@ -688,7 +666,7 @@ async fn handle_lock_create(
     send: &mut iroh::endpoint::SendStream,
     req: &Request,
     auth_pubkey: Option<String>,
-    state: &mut IrohState,
+    state: &mut ServerState,
 ) {
     let pubkey = match auth_pubkey {
         Some(pk) => pk,
@@ -771,7 +749,7 @@ async fn handle_lock_delete(
     send: &mut iroh::endpoint::SendStream,
     req: &Request,
     auth_pubkey: Option<String>,
-    state: &mut IrohState,
+    state: &mut ServerState,
 ) {
     let pubkey = match auth_pubkey {
         Some(pk) => pk,
@@ -852,7 +830,11 @@ async fn handle_lock_delete(
     }
 }
 
-async fn handle_lock_list(send: &mut iroh::endpoint::SendStream, req: &Request, state: &IrohState) {
+async fn handle_lock_list(
+    send: &mut iroh::endpoint::SendStream,
+    req: &Request,
+    state: &ServerState,
+) {
     let lock_db = match state.lock_db.as_ref() {
         Some(db) => db,
         None => {
@@ -915,7 +897,7 @@ async fn handle_lock_verify(
     send: &mut iroh::endpoint::SendStream,
     req: &Request,
     auth_pubkey: Option<String>,
-    state: &IrohState,
+    state: &ServerState,
 ) {
     let pubkey = match auth_pubkey {
         Some(pk) => pk,

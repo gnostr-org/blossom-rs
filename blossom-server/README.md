@@ -15,6 +15,7 @@ A plain `cargo install blossom-server && blossom-server` gives you:
 - **OpenTelemetry tracing** — structured JSON logs with OTEL field names, ready for Jaeger/Tempo
 - **Build integrity** — source hash embedded at compile time, signed release manifests in CI
 - **BUD-20 compression** — server-side zstd + xdelta3 delta encoding for LFS blobs
+- **LFS version tracking** — automatic, shares the same SQLite/Postgres database. Query with `GET /admin/lfs-stats`
 - **Rate limiting, CORS, TLS, graceful shutdown** — production-ready defaults
 
 ## Quick Start
@@ -106,34 +107,34 @@ Other:
 | Method | Path | Description | Protocol |
 |--------|------|-------------|----------|
 | `PUT` | `/upload` | Upload a blob | BUD-01 |
-| `GET` | `/:sha256` | Download a blob | BUD-01 |
-| `HEAD` | `/:sha256` | Check existence + size | BUD-01 |
-| `DELETE` | `/:sha256` | Delete a blob (auth required) | BUD-01 |
-| `GET` | `/list/:pubkey` | List blobs by uploader | BUD-02 |
+| `GET` | `/{sha256}` | Download a blob | BUD-01 |
+| `HEAD` | `/{sha256}` | Check existence + size | BUD-01 |
+| `DELETE` | `/{sha256}` | Delete a blob (auth required) | BUD-01 |
+| `GET` | `/list/{pubkey}` | List blobs by uploader | BUD-02 |
 | `PUT` | `/mirror` | Mirror from remote URL | BUD-04 |
 | `PUT` | `/media` | Upload with processing (`--media`) | BUD-05 |
 | `GET` | `/upload-requirements` | Server constraints | BUD-06 |
-| `POST` | `/lfs/:repo_id/locks` | Create lock | BUD-19 |
-| `GET` | `/lfs/:repo_id/locks` | List locks | BUD-19 |
-| `POST` | `/lfs/:repo_id/locks/verify` | Verify locks (ours/theirs) | BUD-19 |
-| `POST` | `/lfs/:repo_id/locks/:id/unlock` | Unlock | BUD-19 |
+| `POST` | `/lfs/{repo_id}/locks` | Create lock | BUD-19 |
+| `GET` | `/lfs/{repo_id}/locks` | List locks | BUD-19 |
+| `POST` | `/lfs/{repo_id}/locks/verify` | Verify locks (ours/theirs) | BUD-19 |
+| `POST` | `/lfs/{repo_id}/locks/:id/unlock` | Unlock | BUD-19 |
 | `GET` | `/status` | Server statistics + build integrity | - |
 | `GET` | `/health` | Health check (200 OK) | - |
 | `GET` | `/admin/stats` | Server statistics | Admin |
 | `GET` | `/admin/lfs-stats` | LFS storage efficiency metrics | Admin |
-| `GET` | `/admin/users/:pubkey` | Get user record | Admin |
-| `PUT` | `/admin/users/:pubkey/quota` | Set user quota | Admin |
-| `PUT` | `/admin/users/:pubkey/role` | Set user role | Admin |
+| `GET` | `/admin/users/{pubkey}` | Get user record | Admin |
+| `PUT` | `/admin/users/{pubkey}/quota` | Set user quota | Admin |
+| `PUT` | `/admin/users/{pubkey}/role` | Set user role | Admin |
 | `GET` | `/admin/roles` | List users by role | Admin |
 | `GET` | `/admin/blobs` | Blob count and size | Admin |
-| `DELETE` | `/admin/blobs/:sha256` | Admin delete blob | Admin |
+| `DELETE` | `/admin/blobs/{sha256}` | Admin delete blob | Admin |
 | `GET` | `/admin/whitelist` | List whitelisted pubkeys | Admin |
-| `PUT` | `/admin/whitelist/:pubkey` | Add to whitelist | Admin |
-| `DELETE` | `/admin/whitelist/:pubkey` | Remove from whitelist | Admin |
+| `PUT` | `/admin/whitelist/{pubkey}` | Add to whitelist | Admin |
+| `DELETE` | `/admin/whitelist/{pubkey}` | Remove from whitelist | Admin |
 | `GET` | `/.well-known/nostr/nip96.json` | NIP-96 server info | NIP-96 |
 | `POST` | `/n96` | NIP-96 upload | NIP-96 |
 | `GET` | `/n96` | NIP-96 file list | NIP-96 |
-| `DELETE` | `/n96/:sha256` | NIP-96 delete | NIP-96 |
+| `DELETE` | `/n96/{sha256}` | NIP-96 delete | NIP-96 |
 
 ## Build Integrity
 

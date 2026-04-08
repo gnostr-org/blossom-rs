@@ -262,17 +262,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build metadata database.
     let mut database: Box<dyn blossom_rs::db::BlobDatabase> = if args.memory {
+        let lfs_db = blossom_rs::lfs::MemoryLfsVersionDatabase::new();
+        builder = builder.lfs_version_database(lfs_db);
         Box::new(MemoryDatabase::new())
     } else if let Some(ref pg_url) = args.db_postgres {
         let db = blossom_rs::db::PostgresDatabase::new(pg_url)
             .await
             .map_err(|e| format!("Postgres: {e}"))?;
         info!(db = "postgres", "using PostgreSQL metadata database");
+        // TODO: PostgresDatabase LFS version sharing when impl available
         Box::new(db)
     } else {
         let db_url = format!("sqlite:{}?mode=rwc", args.db_path);
         let db = blossom_rs::db::SqliteDatabase::new(&db_url).await?;
-        info!(db_path = %args.db_path, "using SQLite metadata database");
+        // Share the pool for LFS version tracking (same SQLite file, same tables)
+        let lfs_db = db.share();
+        builder = builder.lfs_version_database(lfs_db);
+        info!(db_path = %args.db_path, "using SQLite metadata database (with LFS version tracking)");
         Box::new(db)
     };
 

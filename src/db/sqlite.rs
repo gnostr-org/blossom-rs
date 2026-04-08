@@ -46,6 +46,16 @@ impl SqliteDatabase {
         Ok(db)
     }
 
+    /// Create a second instance sharing the same connection pool.
+    ///
+    /// Useful for passing the same database to both `BlobDatabase` and
+    /// `LfsVersionDatabase` builder methods.
+    pub fn share(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+        }
+    }
+
     /// Current schema version. Bump this when adding new migrations.
     const SCHEMA_VERSION: i64 = 4;
 

@@ -1,5 +1,28 @@
 # Release Notes
 
+## v0.5.2
+
+### Bug Fixes
+
+- **LFS version database now wired up** — `GET /admin/lfs-stats` was returning "LFS version database not configured" because the server never called `.lfs_version_database()` on the builder. Now shares the same SQLite pool via `SqliteDatabase::share()` (or `MemoryLfsVersionDatabase` with `--memory`).
+- **`SqliteDatabase::share()`** — new method to create a second instance sharing the same connection pool, enabling both `BlobDatabase` and `LfsVersionDatabase` from a single SQLite file.
+
+### Documentation
+
+- Fixed axum 0.8 route syntax in blossom-server README (`:param` → `{param}`)
+- Documented LFS version tracking as automatic in server features list
+
+---
+
+## v0.5.1
+
+### Fixes
+
+- blossom-nip34 added to crates.io publish pipeline (was missing version dep)
+- Publish order: lib → nip34 → server + cli
+
+---
+
 ## v0.5.0
 
 ### Major: NIP-34 Decentralized Git Hosting

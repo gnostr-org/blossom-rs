@@ -24,16 +24,16 @@ pub fn admin_router(state: SharedState) -> Router {
     Router::new()
         .route("/admin/stats", get(handle_admin_stats))
         .route("/admin/users", get(handle_list_users))
-        .route("/admin/users/:pubkey", get(handle_get_user))
-        .route("/admin/users/:pubkey/quota", put(handle_set_quota))
-        .route("/admin/users/:pubkey/role", put(handle_set_role))
+        .route("/admin/users/{pubkey}", get(handle_get_user))
+        .route("/admin/users/{pubkey}/quota", put(handle_set_quota))
+        .route("/admin/users/{pubkey}/role", put(handle_set_role))
         .route("/admin/roles", get(handle_list_roles))
         .route("/admin/lfs-stats", get(handle_lfs_stats))
         .route("/admin/blobs", get(handle_list_all_blobs))
-        .route("/admin/blobs/:sha256", delete(handle_admin_delete_blob))
+        .route("/admin/blobs/{sha256}", delete(handle_admin_delete_blob))
         .route("/admin/whitelist", get(handle_whitelist_list))
         .route(
-            "/admin/whitelist/:pubkey",
+            "/admin/whitelist/{pubkey}",
             put(handle_whitelist_add).delete(handle_whitelist_remove),
         )
         .with_state(state)

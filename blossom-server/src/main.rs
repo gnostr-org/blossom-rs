@@ -169,9 +169,33 @@ struct Args {
     #[arg(long, default_value = "3600")]
     pkarr_republish_secs: u64,
 
+    /// Disable NIP-34 Nostr relay + GRASP git server (enabled by default).
+    #[cfg(feature = "nip34")]
+    #[arg(long)]
+    no_relay: bool,
+
+    /// NIP-34 relay domain (e.g., relay.example.com).
+    #[cfg(feature = "nip34")]
+    #[arg(long, default_value = "localhost")]
+    nip34_domain: String,
+
+    /// NIP-34 LMDB database path.
+    #[cfg(feature = "nip34")]
+    #[arg(long, default_value = "./relay_db")]
+    nip34_lmdb_path: PathBuf,
+
+    /// NIP-34 git repositories directory.
+    #[cfg(feature = "nip34")]
+    #[arg(long, default_value = "./repos")]
+    nip34_repos_path: PathBuf,
+
     /// Log level.
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// Use pretty human-readable log output (default: JSON).
+    #[arg(long)]
+    log_pretty: bool,
 }
 
 #[tokio::main]
@@ -189,15 +213,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Init structured tracing (JSON to stdout, OTEL-compatible field names).
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level));
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .json()
-                .with_target(true)
-                .with_span_list(true),
-        )
-        .init();
+    if args.log_pretty {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_ansi(true),
+            )
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_span_list(true),
+            )
+            .init();
+    }
 
     // Build storage backend.
     let mut builder = if args.memory {
@@ -361,6 +396,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("admin endpoints enabled at /admin/*");
     }
 
+    // NIP-34 relay + GRASP git server (enabled by default)
+    #[cfg(feature = "nip34")]
+    if !args.no_relay {
+        let nip34_config = blossom_nip34::Nip34Config {
+            domain: args.nip34_domain.clone(),
+            lmdb_path: args.nip34_lmdb_path.clone(),
+            repos_path: args.nip34_repos_path.clone(),
+            ..Default::default()
+        };
+        let nip34_router = blossom_nip34::build_nip34_router(nip34_config)
+            .await
+            .map_err(|e| format!("NIP-34 relay: {e}"))?;
+        app = app.merge(nip34_router);
+        info!(
+            nip34.domain = %args.nip34_domain,
+            nip34.repos = %args.nip34_repos_path.display(),
+            "NIP-34 relay + GRASP git server enabled"
+        );
+    }
+
     let app = app.layer(cors);
 
     // Spawn stats flush loop.
@@ -452,6 +507,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PkarrConfig {
                     http_url: Some(args.base_url.clone()),
                     iroh_node_id: Some(node_id.to_string()),
+                    #[cfg(feature = "nip34")]
+                    nostr_relay_url: if !args.no_relay {
+                        Some(format!("wss://{}", args.nip34_domain))
+                    } else {
+                        None
+                    },
+                    #[cfg(not(feature = "nip34"))]
+                    nostr_relay_url: None,
                     republish_interval: std::time::Duration::from_secs(args.pkarr_republish_secs),
                     ttl: 3600,
                 },

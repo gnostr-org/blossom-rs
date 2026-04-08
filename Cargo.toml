@@ -1,9 +1,9 @@
 [workspace]
-members = [".", "blossom-server", "blossom-cli", "xtask"]
+members = [".", "blossom-server", "blossom-cli", "xtask", "blossom-nip34"]
 
 [package]
 name = "blossom-rs"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Full-featured Blossom (BUD-01) blob storage library for Rust — embeddable server, async client, BIP-340 Nostr auth"
@@ -69,7 +69,7 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 
 # Server (optional)
-axum = { version = "0.7", features = ["ws"], optional = true }
+axum = { version = "0.8", features = ["ws"], optional = true }
 axum-extra = { version = "0.9", optional = true }
 tower-http = { version = "0.5", features = ["cors", "limit", "trace"], optional = true }
 
@@ -106,7 +106,10 @@ iroh = { version = "0.97", optional = true }
 anyhow = { version = "1", optional = true }
 
 # PKARR discovery (optional)
-pkarr = { version = "6.0.0-rc.0", default-features = false, features = ["relays", "signed_packet", "dht"], optional = true }
+# NOTE: "dht" feature omitted — mainline 6.1.1 on crates.io pins digest =0.11.0-rc.9
+# which conflicts with iroh 0.97's digest =0.11.0-rc.10. Re-enable when mainline 6.1.2
+# is published. Relay-only mode still works for PKARR discovery.
+pkarr = { version = "6.0.0-rc.0", default-features = false, features = ["relays", "signed_packet"], optional = true }
 
 # Statistics
 dashmap = "6"
@@ -123,8 +126,3 @@ rand = "0.8"
 tempfile = "3"
 proptest = "1"
 serial_test = "3"
-
-[patch.crates-io]
-# mainline 6.1.1 on crates.io pins digest =0.11.0-rc.9, but iroh 0.97 needs
-# =0.11.0-rc.10. The git repo has the fix; use it until 6.1.2 is published.
-mainline = { git = "https://github.com/pubky/mainline.git" }

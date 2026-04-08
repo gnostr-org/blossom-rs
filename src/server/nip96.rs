@@ -88,7 +88,7 @@ pub fn nip96_router(state: SharedState) -> Router {
     Router::new()
         .route("/.well-known/nostr/nip96.json", get(handle_nip96_info))
         .route("/n96", post(handle_nip96_upload).get(handle_nip96_list))
-        .route("/n96/:sha256", delete(handle_nip96_delete))
+        .route("/n96/{sha256}", delete(handle_nip96_delete))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
 }

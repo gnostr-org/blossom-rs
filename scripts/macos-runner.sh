@@ -209,6 +209,9 @@ cmd_install() {
         --replace
 
     info "Installing as a launchd service (runs at login)"
+    # Remove stale plist if present (svc.sh install fails if it already exists)
+    (cd "$RUNNER_DIR" && ./svc.sh stop 2>/dev/null || true)
+    (cd "$RUNNER_DIR" && ./svc.sh uninstall 2>/dev/null || true)
     (cd "$RUNNER_DIR" && ./svc.sh install && ./svc.sh start)
 
     info "Done. Runner '$RUNNER_NAME' is registered and running."

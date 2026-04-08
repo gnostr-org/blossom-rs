@@ -112,8 +112,8 @@ let data = client.download(&desc.sha256).await?;
 | `db-postgres` | no | PostgreSQL metadata backend via SQLx |
 | `media` | no | Image processing (WebP, thumbnails, blurhash, EXIF) |
 | `labels` | no | Content classification (Vision Transformer, LLM API) |
-| `iroh-transport` | no | P2P QUIC transport via iroh (node-ID addressed, hole-punching) |
-| `pkarr-discovery` | no | Publish endpoints to Mainline DHT via PKARR (unified Ed25519 identity) |
+| `iroh-transport` | yes | P2P QUIC transport via iroh (node-ID addressed, hole-punching) |
+| `pkarr-discovery` | yes | Publish endpoints to Mainline DHT via PKARR (unified Ed25519 identity) |
 | `otel` | no | OpenTelemetry OTLP export (Jaeger, Tempo, Seq, Honeycomb) |
 
 ## Protocol Support

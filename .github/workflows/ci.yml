@@ -82,15 +82,71 @@ jobs:
         include:
           - os: ubuntu-latest
             timeout: 30
-          - os: macos-latest
-            timeout: 20
-          - os: macos-15-intel
-            timeout: 20
           - os: windows-latest
             timeout: 30
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
-    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - name: Resolve build targets
+        id: targets
+        shell: bash
+        run: |
+          case "${{ inputs.targets || 'all' }}" in
+            all)      echo "flag=--all-targets" >> "$GITHUB_OUTPUT" ;;
+            *)        echo "flag=--${{ inputs.targets }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - run: cargo build --workspace ${{ steps.targets.outputs.flag }}
+      - run: cargo run -p blossom-cli -- -V
+      - run: cargo run -p blossom-server -- -V
+      - run: cargo test --workspace
+      - run: cargo test --features iroh-transport --test iroh_integration
+      - run: cargo clippy --workspace -- -D warnings
+
+  ci-pr-macos-intel:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - name: Resolve build targets
+        id: targets
+        shell: bash
+        run: |
+          case "${{ inputs.targets || 'all' }}" in
+            all)      echo "flag=--all-targets" >> "$GITHUB_OUTPUT" ;;
+            *)        echo "flag=--${{ inputs.targets }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - run: cargo build --workspace ${{ steps.targets.outputs.flag }}
+      - run: cargo run -p blossom-cli -- -V
+      - run: cargo run -p blossom-server -- -V
+      - run: cargo test --workspace
+      - run: cargo test --features iroh-transport --test iroh_integration
+      - run: cargo clippy --workspace -- -D warnings
+
+  ci-pr-macos-arm:
+    needs: ci-pr-macos-intel
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    runs-on: macos-latest
+    timeout-minutes: 20
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust

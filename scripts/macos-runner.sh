@@ -114,6 +114,10 @@ runners_settings_url() {
     fi
 }
 
+scope_label() {
+    if [[ -n "$REPO" ]]; then echo "repo: $ORG/$REPO"; else echo "org: $ORG"; fi
+}
+
 latest_runner_url() {
     curl -fsSL https://api.github.com/repos/actions/runner/releases/latest \
         | python3 -c "
@@ -147,7 +151,7 @@ cmd_install() {
         cmd_remove
     fi
 
-    info "Fetching registration token (${REPO:+repo: $ORG/$REPO}${REPO:-org: $ORG})"
+    info "Fetching registration token ($(scope_label))"
     TOKEN=$(registration_token)
 
     info "Resolving latest runner release..."
@@ -200,7 +204,7 @@ cmd_uninstall() {
     info "Stopping and removing service"
     (cd "$RUNNER_DIR" && ./svc.sh stop || true && ./svc.sh uninstall || true)
 
-    info "Fetching removal token (${REPO:+repo: $ORG/$REPO}${REPO:-org: $ORG})"
+    info "Fetching removal token ($(scope_label))"
     TOKEN=$(removal_token)
 
     info "Removing runner from GitHub"

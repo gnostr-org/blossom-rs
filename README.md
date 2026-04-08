@@ -143,7 +143,7 @@ All extension points are trait-based:
 BlossomSigner   — BIP-340 signing (bring your own identity)
 BlobBackend     — blob storage (Memory, Filesystem, S3)
 BlobDatabase    — metadata persistence (Memory, SQLite, Postgres)
-LockDatabase    — BUD-19 file locks (Memory; bring your own for persistence)
+LockDatabase    — BUD-19 file locks (Memory, SQLite, Postgres)
 AccessControl   — authorization (OpenAccess, Whitelist, custom)
 WebhookNotifier — event notifications (Noop, HTTP POST, custom)
 MediaProcessor  — image/video processing (Passthrough, ImageProcessor)

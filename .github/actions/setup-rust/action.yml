@@ -1,0 +1,22 @@
+name: Setup Rust
+description: Checkout repository and install the stable Rust toolchain.
+
+inputs:
+  components:
+    description: 'Comma-separated toolchain components (e.g. rustfmt, clippy)'
+    required: false
+    default: ''
+  fetch-depth:
+    description: 'Number of commits to fetch (0 = full history)'
+    required: false
+    default: '1'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: ${{ inputs.fetch-depth }}
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.components }}

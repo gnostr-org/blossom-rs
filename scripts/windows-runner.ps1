@@ -175,7 +175,9 @@ function Cmd-Install {
     $token = RegistrationToken
 
     Info "Resolving latest runner release..."
-    $url     = LatestRunnerUrl
+    $info    = LatestRunnerInfo
+    $url     = $info.Url
+    $sha     = $info.Sha256
     $version = [regex]::Match($url, '\d+\.\d+\.\d+').Value
     Info "Runner version: $version"
 
@@ -199,6 +201,7 @@ function Cmd-Install {
             Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
         }
     }
+    Verify-Archive -File $archive -Expected $sha
 
     Invoke-WithDots "Extracting runner archive..." {
         Expand-Archive -Path $using:archive -DestinationPath $using:Dir -Force

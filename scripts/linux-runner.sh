@@ -159,15 +159,34 @@ scope_label() {
     if [[ -n "$REPO" ]]; then echo "repo: $ORG/$REPO"; else echo "org: $ORG"; fi
 }
 
-latest_runner_url() {
+latest_runner_info() {
+    # Prints: <url> <sha256>
     curl -fsSL https://api.github.com/repos/actions/runner/releases/latest \
         | python3 -c "
 import sys, json
 assets = json.load(sys.stdin)['assets']
-url = next(a['browser_download_url'] for a in assets
-           if 'linux-x64' in a['name'] and a['name'].endswith('.tar.gz'))
-print(url)
+a = next(a for a in assets
+         if 'linux-x64' in a['name'] and a['name'].endswith('.tar.gz'))
+sha = a.get('digest', '').replace('sha256:', '')
+print(a['browser_download_url'], sha)
 "
+}
+
+verify_archive() {
+    local file="$1" expected="$2"
+    if [[ -z "$expected" ]]; then
+        echo "[warn]  No SHA256 from API — skipping verification"
+        return
+    fi
+    info "SHA256 expected: $expected"
+    local actual
+    actual=$(shasum -a 256 "$file" | awk '{print $1}')
+    info "SHA256 actual:   $actual"
+    if [[ "$actual" == "$expected" ]]; then
+        info "SHA256 verified ✓"
+    else
+        error "SHA256 mismatch!"
+    fi
 }
 
 # ── commands ─────────────────────────────────────────────────────────────────
@@ -196,7 +215,8 @@ cmd_install() {
     TOKEN=$(registration_token)
 
     info "Resolving latest runner release..."
-    URL=$(latest_runner_url)
+    info "Resolving latest runner release..."
+    read -r URL SHA <<< "$(latest_runner_info)"
     VERSION=$(echo "$URL" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     info "Runner version: $VERSION"
 
@@ -221,6 +241,7 @@ cmd_install() {
             curl -#fL "$URL" -o "$ARCHIVE"
         fi
     fi
+    verify_archive "$ARCHIVE" "$SHA"
     with_spinner "Extracting runner archive..." tar xzf "$ARCHIVE" -C "$RUNNER_DIR"
 
     info "Configuring runner (name=$RUNNER_NAME, labels=$RUNNER_LABELS)"

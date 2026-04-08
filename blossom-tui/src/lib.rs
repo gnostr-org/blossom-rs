@@ -115,7 +115,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(server: String, secret_key: Option<String>, tx: mpsc::UnboundedSender<AppMsg>) -> Self {
+    pub fn new(
+        server: String,
+        secret_key: Option<String>,
+        tx: mpsc::UnboundedSender<AppMsg>,
+    ) -> Self {
         let pubkey = secret_key
             .as_deref()
             .and_then(|k| Signer::from_secret_hex(k).ok().map(|s| s.public_key_hex()));

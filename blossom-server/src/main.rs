@@ -169,10 +169,10 @@ struct Args {
     #[arg(long, default_value = "3600")]
     pkarr_republish_secs: u64,
 
-    /// Enable NIP-34 Nostr relay + GRASP git server.
+    /// Disable NIP-34 Nostr relay + GRASP git server (enabled by default).
     #[cfg(feature = "nip34")]
     #[arg(long)]
-    nip34: bool,
+    no_relay: bool,
 
     /// NIP-34 relay domain (e.g., relay.example.com).
     #[cfg(feature = "nip34")]
@@ -381,9 +381,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("admin endpoints enabled at /admin/*");
     }
 
-    // NIP-34 relay + GRASP git server (optional feature)
+    // NIP-34 relay + GRASP git server (enabled by default)
     #[cfg(feature = "nip34")]
-    if args.nip34 {
+    if !args.no_relay {
         let nip34_config = blossom_nip34::Nip34Config {
             domain: args.nip34_domain.clone(),
             lmdb_path: args.nip34_lmdb_path.clone(),
@@ -493,7 +493,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     http_url: Some(args.base_url.clone()),
                     iroh_node_id: Some(node_id.to_string()),
                     #[cfg(feature = "nip34")]
-                    nostr_relay_url: if args.nip34 {
+                    nostr_relay_url: if !args.no_relay {
                         Some(format!("wss://{}", args.nip34_domain))
                     } else {
                         None

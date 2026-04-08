@@ -42,6 +42,10 @@ struct Args {
     #[arg(short = 'f', long, default_value = "text", global = true)]
     format: OutputFormat,
 
+    /// Disable publishing NIP-94 file metadata and BUD-03 server list events after upload.
+    #[arg(long, global = true)]
+    no_publish: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -342,6 +346,34 @@ async fn run(args: Args) -> Result<(), String> {
             let desc = client.upload_file(&(), &file, &mime).await?;
 
             print_output(&args.format, &serde_json::to_value(&desc).unwrap());
+
+            // Publish NIP-94 file metadata + BUD-03 server list (default on)
+            if !args.no_publish {
+                let pub_signer = get_signer(&args.key)?;
+                let base = args.server.trim_end_matches('/');
+
+                let file_event = blossom_rs::nostr_events::build_file_metadata_event(
+                    &pub_signer,
+                    &desc,
+                    base,
+                    &mime,
+                );
+                if let Err(e) = blossom_rs::nostr_events::publish_to_relay(base, &file_event).await
+                {
+                    tracing::warn!(error = %e, "failed to publish file metadata event");
+                }
+
+                let server_event = blossom_rs::nostr_events::build_server_list_event(
+                    &pub_signer,
+                    std::slice::from_ref(&args.server),
+                );
+                if let Err(e) =
+                    blossom_rs::nostr_events::publish_to_relay(base, &server_event).await
+                {
+                    tracing::warn!(error = %e, "failed to publish server list event");
+                }
+            }
+
             Ok(())
         }
 

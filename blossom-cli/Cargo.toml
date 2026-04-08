@@ -18,6 +18,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "htt
 hex = "0.4"
 bech32 = "0.11"
 iroh = "0.97"
+tracing = "0.1"
 pkarr = { version = "6.0.0-rc.0", default-features = false, features = ["keys"] }
 
 [build-dependencies]

@@ -45,6 +45,7 @@ pub mod labels;
 pub mod lfs;
 pub mod locks;
 pub mod media;
+pub mod nostr_events;
 pub mod otel;
 pub mod protocol;
 pub mod ratelimit;

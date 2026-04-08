@@ -10,7 +10,7 @@
 #   ./scripts/macos-runner.sh [options] [install|start|stop|status|uninstall]
 #
 # Options:
-#   --org <org>          GitHub organization (default: gnostr-org)
+#   --org <org>          GitHub organization (default: MonumentalSystems)
 #   --name <name>        Runner name (default: <hostname>-intel)
 #   --labels <labels>    Comma-separated runner labels
 #                        (default: self-hosted,macOS,X64,macos-15-intel)
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner}"
-ORG="${RUNNER_ORG:-gnostr-org}"
+ORG="${RUNNER_ORG:-MonumentalSystems}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname -s)-intel}"
 RUNNER_LABELS="self-hosted,macOS,X64,macos-15-intel"
 RUNNER_GROUP="Default"

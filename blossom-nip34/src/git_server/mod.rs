@@ -23,18 +23,18 @@ use crate::Nip34State;
 /// - `GET /:npub/:repo/objects/*rest` — loose objects and packs
 pub fn git_router() -> axum::Router<Arc<Nip34State>> {
     axum::Router::new()
-        .route("/{npub}/{repo}/info/refs", axum::routing::get(info_refs))
+        .route("/:npub/:repo/info/refs", axum::routing::get(info_refs))
         .route(
-            "/{npub}/{repo}/git-upload-pack",
+            "/:npub/:repo/git-upload-pack",
             axum::routing::post(upload_pack),
         )
         .route(
-            "/{npub}/{repo}/git-receive-pack",
+            "/:npub/:repo/git-receive-pack",
             axum::routing::post(receive_pack),
         )
 }
 
-/// GET /{npub}/{repo}/info/refs?service=git-upload-pack
+/// GET /:npub/:repo/info/refs?service=git-upload-pack
 async fn info_refs(
     State(state): State<Arc<Nip34State>>,
     Path((npub, repo)): Path<(String, String)>,
@@ -77,7 +77,7 @@ async fn info_refs(
     }
 }
 
-/// POST /{npub}/{repo}/git-upload-pack
+/// POST /:npub/:repo/git-upload-pack
 async fn upload_pack(
     State(state): State<Arc<Nip34State>>,
     Path((npub, repo)): Path<(String, String)>,
@@ -105,7 +105,7 @@ async fn upload_pack(
     }
 }
 
-/// POST /{npub}/{repo}/git-receive-pack
+/// POST /:npub/:repo/git-receive-pack
 async fn receive_pack(
     State(state): State<Arc<Nip34State>>,
     Path((npub, repo)): Path<(String, String)>,

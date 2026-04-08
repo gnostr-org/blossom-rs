@@ -169,6 +169,26 @@ struct Args {
     #[arg(long, default_value = "3600")]
     pkarr_republish_secs: u64,
 
+    /// Enable NIP-34 Nostr relay + GRASP git server.
+    #[cfg(feature = "nip34")]
+    #[arg(long)]
+    nip34: bool,
+
+    /// NIP-34 relay domain (e.g., relay.example.com).
+    #[cfg(feature = "nip34")]
+    #[arg(long, default_value = "localhost")]
+    nip34_domain: String,
+
+    /// NIP-34 LMDB database path.
+    #[cfg(feature = "nip34")]
+    #[arg(long, default_value = "./relay_db")]
+    nip34_lmdb_path: PathBuf,
+
+    /// NIP-34 git repositories directory.
+    #[cfg(feature = "nip34")]
+    #[arg(long, default_value = "./repos")]
+    nip34_repos_path: PathBuf,
+
     /// Log level.
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -359,6 +379,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.enable_admin {
         app = app.merge(admin_router(state.clone()));
         info!("admin endpoints enabled at /admin/*");
+    }
+
+    // NIP-34 relay + GRASP git server (optional feature)
+    #[cfg(feature = "nip34")]
+    if args.nip34 {
+        let nip34_config = blossom_nip34::Nip34Config {
+            domain: args.nip34_domain.clone(),
+            lmdb_path: args.nip34_lmdb_path.clone(),
+            repos_path: args.nip34_repos_path.clone(),
+            ..Default::default()
+        };
+        let nip34_router = blossom_nip34::build_nip34_router(nip34_config)
+            .await
+            .map_err(|e| format!("NIP-34 relay: {e}"))?;
+        app = app.merge(nip34_router);
+        info!(
+            nip34.domain = %args.nip34_domain,
+            nip34.repos = %args.nip34_repos_path.display(),
+            "NIP-34 relay + GRASP git server enabled"
+        );
     }
 
     let app = app.layer(cors);

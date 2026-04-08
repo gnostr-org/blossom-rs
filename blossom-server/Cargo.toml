@@ -11,6 +11,7 @@ categories = ["command-line-utilities", "web-programming"]
 
 [dependencies]
 blossom-rs = { path = "..", version = "0.4.2", features = ["server", "filesystem", "s3", "db-sqlite", "db-postgres", "media", "iroh-transport", "pkarr-discovery"] }
+blossom-nip34 = { path = "../blossom-nip34", optional = true }
 axum = "0.7"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -21,6 +22,9 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 serde_json = "1.0"
 iroh = "0.97"
 rand = "0.9"
+
+[features]
+nip34 = ["dep:blossom-nip34"]
 
 [build-dependencies]
 sha2 = "0.10"

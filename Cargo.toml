@@ -17,7 +17,7 @@ members = [".", "blossom-cli", "blossom-server", "blossom-tui", "xtask"]
 default = ["server", "client", "filesystem", "lfs"]
 
 # Core
-server = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:reqwest", "lfs"]
+server = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:reqwest", "lfs", "dep:reqwest", "dep:zstd", "dep:xdelta3", "db-sqlite", "filesystem"]
 client = ["dep:reqwest", "dep:zstd", "dep:xdelta3", "server", "db-sqlite", "filesystem"]
 filesystem = []
 

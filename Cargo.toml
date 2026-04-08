@@ -14,10 +14,10 @@ categories = ["web-programming", "cryptography"]
 members = [".", "blossom-cli", "blossom-server", "blossom-tui", "xtask"]
 
 [features]
-default = ["server", "client", "filesystem"]
+default = ["server", "client", "filesystem", "lfs"]
 
 # Core
-server = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:reqwest"]
+server = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:reqwest", "lfs"]
 client = ["dep:reqwest"]
 filesystem = []
 
@@ -36,13 +36,22 @@ media = ["dep:image", "dep:webp", "dep:blurhash", "dep:kamadak-exif"]
 labels = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
 
 # P2P transport via iroh QUIC
-iroh-transport = ["dep:iroh", "dep:anyhow"]
+iroh-transport = ["dep:iroh", "dep:anyhow", "lfs"]
 
 # PKARR discovery — publish/resolve blossom endpoints via Mainline DHT
 pkarr-discovery = ["dep:pkarr", "iroh-transport"]
 
 # Observability — opt-in OTEL export support for consumers
-otel = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-subscriber"]
+otel = [
+    "dep:tracing-opentelemetry",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-subscriber",
+]
+
+# LFS delta compression — requires C toolchain (xdelta3 + zstd)
+lfs = ["dep:xdelta3", "dep:zstd"]
 
 [dependencies]
 # Crypto

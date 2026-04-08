@@ -1,5 +1,3 @@
-[workspace]
-members = [".", "blossom-server", "blossom-cli", "xtask"]
 
 [package]
 name = "blossom-rs"
@@ -12,6 +10,8 @@ readme = "README.md"
 repository = "https://github.com/MonumentalSystems/blossom-rs"
 keywords = ["blossom", "nostr", "blob", "storage", "bip340"]
 categories = ["web-programming", "cryptography"]
+[workspace]
+members = [".", "blossom-cli", "blossom-server", "blossom-tui", "xtask"]
 
 [features]
 default = ["server", "client", "filesystem"]

@@ -45,19 +45,19 @@ FORCE_REMOVE=0
 info()  { echo "[info]  $*"; }
 error() { echo "[error] $*" >&2; exit 1; }
 
-# Run a command in the background with an ASCII spinner on the right.
+# Run a command in the background with animated trailing dots.
 # Usage: with_spinner "label" cmd [args...]
 with_spinner() {
-    local label="$1"; shift
+    local label="${1%...}"; shift   # strip any trailing dots; we animate them
     local log; log="$(mktemp)"
     "$@" >"$log" 2>&1 &
     local pid=$!
-    local frames=('|' '/' '-' '\\')
     local i=0
+    local dots=('.' '..' '...')
     while kill -0 "$pid" 2>/dev/null; do
-        printf "\r[info]  %s  %s " "$label" "${frames[$((i % 4))]}"
+        printf "\r[info]  %s%-3s   " "$label" "${dots[$((i % 3))]}"
         i=$((i + 1))
-        sleep 0.1
+        sleep 0.3
     done
     wait "$pid"
     local rc=$?

@@ -179,7 +179,7 @@ cmd_install() {
     ARCHIVE="$RUNNER_DIR/runner.tar.gz"
     curl -fsSL "$URL" -o "$ARCHIVE"
     tar xzf "$ARCHIVE" -C "$RUNNER_DIR"
-    rm "$ARCHIVE"
+
 
     info "Configuring runner (name=$RUNNER_NAME, labels=$RUNNER_LABELS)"
     "$RUNNER_DIR/config.sh" \

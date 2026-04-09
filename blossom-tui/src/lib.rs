@@ -5752,6 +5752,9 @@ pub struct TuiState {
     /// Last active tab index.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab: Option<usize>,
+    /// Last active NIP sub-tab index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nip_tab: Option<usize>,
     /// Blob list sort preference.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_field: Option<SortField>,
@@ -5767,32 +5770,58 @@ pub struct TuiState {
     /// NIP-34 relay URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nip34_relay: Option<String>,
+    // NIP-65 relay list (kind:10002)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nip65_relays: Vec<(String, String)>, // (url, marker)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nip65_nostr_relay: Option<String>,
+    // NIP-B7 server list (kind:10063)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nipb7_servers: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nipb7_nostr_relay: Option<String>,
+    // Profile (kind:0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_about: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_picture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_nip05: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_website: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_lud16: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_nostr_relay: Option<String>,
 }
 
 impl App {
     /// Snapshot the persistent fields into a [`TuiState`].
     pub fn to_state(&self) -> TuiState {
+        let opt_str = |s: &str| if s.is_empty() { None } else { Some(s.to_owned()) };
         TuiState {
             server: Some(self.server.clone()),
             secret_key: self.secret_key.clone(),
             tab: Some(self.tab),
+            nip_tab: Some(self.nip_tab),
             sort_field: Some(self.sort_field),
-            filter_str: if self.filter_str.is_empty() {
-                None
-            } else {
-                Some(self.filter_str.clone())
-            },
+            filter_str: opt_str(&self.filter_str),
             publish_nip94: Some(self.publish_nip94),
-            publish_relay: if self.publish_relay.is_empty() {
-                None
-            } else {
-                Some(self.publish_relay.clone())
-            },
-            nip34_relay: if self.nip34_relay.is_empty() {
-                None
-            } else {
-                Some(self.nip34_relay.clone())
-            },
+            publish_relay: opt_str(&self.publish_relay),
+            nip34_relay: opt_str(&self.nip34_relay),
+            nip65_relays: self.nip65_relays.clone(),
+            nip65_nostr_relay: opt_str(&self.nip65_nostr_relay),
+            nipb7_servers: self.nipb7_servers.clone(),
+            nipb7_nostr_relay: opt_str(&self.nipb7_nostr_relay),
+            profile_name: opt_str(&self.profile_name),
+            profile_about: opt_str(&self.profile_about),
+            profile_picture: opt_str(&self.profile_picture),
+            profile_nip05: opt_str(&self.profile_nip05),
+            profile_website: opt_str(&self.profile_website),
+            profile_lud16: opt_str(&self.profile_lud16),
+            profile_nostr_relay: opt_str(&self.profile_nostr_relay),
         }
     }
 
@@ -5801,6 +5830,9 @@ impl App {
     pub fn apply_state(&mut self, state: &TuiState) {
         if let Some(t) = state.tab {
             self.tab = t.min(TAB_NAMES.len().saturating_sub(1));
+        }
+        if let Some(n) = state.nip_tab {
+            self.nip_tab = n.min(NIP_TAB_NAMES.len().saturating_sub(1));
         }
         if let Some(sf) = state.sort_field {
             self.sort_field = sf;
@@ -5817,6 +5849,25 @@ impl App {
         if let Some(r) = &state.nip34_relay {
             self.nip34_relay = r.clone();
         }
+        if !state.nip65_relays.is_empty() {
+            self.nip65_relays = state.nip65_relays.clone();
+        }
+        if let Some(r) = &state.nip65_nostr_relay {
+            self.nip65_nostr_relay = r.clone();
+        }
+        if !state.nipb7_servers.is_empty() {
+            self.nipb7_servers = state.nipb7_servers.clone();
+        }
+        if let Some(r) = &state.nipb7_nostr_relay {
+            self.nipb7_nostr_relay = r.clone();
+        }
+        if let Some(v) = &state.profile_name     { self.profile_name     = v.clone(); }
+        if let Some(v) = &state.profile_about    { self.profile_about    = v.clone(); }
+        if let Some(v) = &state.profile_picture  { self.profile_picture  = v.clone(); }
+        if let Some(v) = &state.profile_nip05    { self.profile_nip05    = v.clone(); }
+        if let Some(v) = &state.profile_website  { self.profile_website  = v.clone(); }
+        if let Some(v) = &state.profile_lud16    { self.profile_lud16    = v.clone(); }
+        if let Some(v) = &state.profile_nostr_relay { self.profile_nostr_relay = v.clone(); }
     }
 }
 

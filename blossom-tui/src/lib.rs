@@ -2769,7 +2769,8 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  ↓ / j            ", "Navigate down"),
                 kv("  Enter            ", "Enter dir / accept file"),
                 kv("  Backspace / h / -", "Go to parent directory"),
-                kv("  f / Esc          ", "Close file browser"),
+                kv("  Esc              ", "Go up (close at root)"),
+                kv("  f                ", "Close file browser"),
             ],
         ),
         // Batch
@@ -3041,8 +3042,16 @@ pub async fn run_loop(
                                 KeyCode::Enter => app.filebrowser_enter(),
                                 KeyCode::Backspace
                                 | KeyCode::Char('h')
-                                | KeyCode::Char('-') => app.filebrowser_parent(),
-                                KeyCode::Char('f') | KeyCode::Esc => {
+                                | KeyCode::Char('-')
+                                | KeyCode::Esc => {
+                                    // Esc/Backspace: go up; close at root.
+                                    if app.filebrowser_cwd.parent().is_some() {
+                                        app.filebrowser_parent();
+                                    } else {
+                                        app.filebrowser_active = false;
+                                    }
+                                }
+                                KeyCode::Char('f') => {
                                     app.filebrowser_active = false
                                 }
                                 _ => {}

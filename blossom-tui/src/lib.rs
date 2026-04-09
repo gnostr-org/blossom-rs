@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 // ── Constants ────────────────────────────────────────────────────────────────
 
 pub const APP_TITLE: &str = "blossom-tui";
-pub const TAB_NAMES: &[&str] = &[" Blobs ", " Upload ", " Status ", " Keygen "];
+pub const TAB_NAMES: &[&str] = &[" Blobs ", " Upload ", " Batch ", " Status ", " Keygen "];
 
 pub const COLOR_ACCENT: Color = Color::Cyan;
 pub const COLOR_OK: Color = Color::Green;
@@ -95,6 +95,24 @@ pub enum AppMsg {
     DownloadError(String),
     MirrorDone(BlobDescriptor),
     MirrorError(String),
+    BatchItemDone(usize, BlobDescriptor), // (index, descriptor)
+    BatchItemError(usize, String),        // (index, error)
+}
+
+// ── Batch upload ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum BatchStatus {
+    Pending,
+    Running,
+    Done(BlobDescriptor),
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct BatchItem {
+    pub path: String,
+    pub status: BatchStatus,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -138,6 +156,12 @@ pub struct App {
     // Keygen tab
     pub keygen_data: Option<KeygenResult>,
 
+    // Batch upload tab
+    pub batch_items: Vec<BatchItem>,
+    pub batch_input: String,
+    pub batch_input_mode: bool,
+    pub batch_running: bool,
+
     // UI state
     pub show_help: bool,
     pub notification: Option<(String, bool)>, // (message, is_error)
@@ -178,6 +202,10 @@ impl App {
             status_loading: false,
             status_error: None,
             keygen_data: None,
+            batch_items: Vec::new(),
+            batch_input: String::new(),
+            batch_input_mode: false,
+            batch_running: false,
             show_help: false,
             notification: None,
             modal: None,
@@ -266,6 +294,28 @@ impl App {
             }
             AppMsg::MirrorError(e) => {
                 self.notification = Some((format!("Mirror failed: {e}"), true));
+            }
+            AppMsg::BatchItemDone(idx, desc) => {
+                if let Some(item) = self.batch_items.get_mut(idx) {
+                    item.status = BatchStatus::Done(desc);
+                }
+                let all_done = self.batch_items.iter().all(|i| {
+                    matches!(i.status, BatchStatus::Done(_) | BatchStatus::Failed(_))
+                });
+                if all_done {
+                    self.batch_running = false;
+                }
+            }
+            AppMsg::BatchItemError(idx, e) => {
+                if let Some(item) = self.batch_items.get_mut(idx) {
+                    item.status = BatchStatus::Failed(e);
+                }
+                let all_done = self.batch_items.iter().all(|i| {
+                    matches!(i.status, BatchStatus::Done(_) | BatchStatus::Failed(_))
+                });
+                if all_done {
+                    self.batch_running = false;
+                }
             }
         }
     }
@@ -596,6 +646,85 @@ impl App {
             };
         });
     }
+
+    /// Add a path to the batch queue.
+    pub fn add_batch_path(&mut self) {
+        let path = self.batch_input.trim().to_string();
+        if path.is_empty() {
+            return;
+        }
+        self.batch_items.push(BatchItem { path, status: BatchStatus::Pending });
+        self.batch_input.clear();
+    }
+
+    /// Remove the last batch item.
+    pub fn remove_last_batch_item(&mut self) {
+        if !self.batch_running {
+            self.batch_items.pop();
+        }
+    }
+
+    /// Start uploading all pending items with concurrency limit 4.
+    pub fn start_batch_upload(&mut self) {
+        if self.batch_running || self.batch_items.is_empty() {
+            return;
+        }
+        if self.secret_key.is_none() {
+            self.notification = Some(("A secret key is required to upload.".into(), true));
+            return;
+        }
+        self.batch_running = true;
+        // Mark all pending
+        for item in &mut self.batch_items {
+            if matches!(item.status, BatchStatus::Pending | BatchStatus::Failed(_)) {
+                item.status = BatchStatus::Running;
+            }
+        }
+
+        let server = self.server.clone();
+        let secret_key = self.secret_key.clone().unwrap();
+        let tx = self.tx.clone();
+        let paths: Vec<(usize, String)> = self
+            .batch_items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| (i, item.path.clone()))
+            .collect();
+
+        tokio::spawn(async move {
+            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+            let mut handles = Vec::new();
+
+            for (idx, path) in paths {
+                let permit = sem.clone().acquire_owned().await.ok();
+                let server = server.clone();
+                let secret_key = secret_key.clone();
+                let tx = tx.clone();
+                let path = path.clone();
+
+                handles.push(tokio::spawn(async move {
+                    let _permit = permit;
+                    let signer = match Signer::from_secret_hex(&secret_key) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tx.send(AppMsg::BatchItemError(idx, e)).ok();
+                            return;
+                        }
+                    };
+                    let client = BlossomClient::new(vec![server], signer);
+                    let p = std::path::Path::new(&path);
+                    let mime = crate::mime_from_path(p);
+                    match client.upload_file(p, &mime).await {
+                        Ok(desc) => tx.send(AppMsg::BatchItemDone(idx, desc)).ok(),
+                        Err(e) => tx.send(AppMsg::BatchItemError(idx, e)).ok(),
+                    };
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    }
 }
 
 // ── Drawing ───────────────────────────────────────────────────────────────────
@@ -618,8 +747,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.tab {
         0 => draw_blobs_tab(f, app, chunks[2]),
         1 => draw_upload_tab(f, app, chunks[2]),
-        2 => draw_status_tab(f, app, chunks[2]),
-        3 => draw_keygen_tab(f, app, chunks[2]),
+        2 => draw_batch_tab(f, app, chunks[2]),
+        3 => draw_status_tab(f, app, chunks[2]),
+        4 => draw_keygen_tab(f, app, chunks[2]),
         _ => {}
     }
 
@@ -951,6 +1081,88 @@ pub fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let running = if app.batch_running { " (running…)" } else { "" };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Batch Upload{running} "))
+        .border_style(Style::default().fg(COLOR_ACCENT));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // path input
+            Constraint::Length(1), // hints
+            Constraint::Min(1),    // queue
+        ])
+        .split(inner);
+
+    // Path input
+    let input_style = if app.batch_input_mode {
+        Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(COLOR_DIM)
+    };
+    let input_title = if app.batch_input_mode { " Path (Esc: cancel) " } else { " Path (i: edit, Enter: add) " };
+    let input = Paragraph::new(app.batch_input.as_str())
+        .block(Block::default().borders(Borders::ALL).title(input_title).border_style(input_style))
+        .style(Style::default().fg(Color::White));
+    f.render_widget(input, chunks[0]);
+
+    if app.batch_input_mode {
+        f.set_cursor_position((chunks[0].x + app.batch_input.len() as u16 + 1, chunks[0].y + 1));
+    }
+
+    // Hints
+    let done = app.batch_items.iter().filter(|i| matches!(i.status, BatchStatus::Done(_))).count();
+    let failed = app.batch_items.iter().filter(|i| matches!(i.status, BatchStatus::Failed(_))).count();
+    let hint = format!(
+        " {} queued  {} done  {} failed  │  Enter: start upload  x: remove last",
+        app.batch_items.len(),
+        done,
+        failed,
+    );
+    f.render_widget(
+        Paragraph::new(hint.as_str()).style(Style::default().fg(COLOR_DIM)),
+        chunks[1],
+    );
+
+    // Queue list
+    let rows: Vec<Row> = app.batch_items.iter().map(|item| {
+        let (status_text, status_style) = match &item.status {
+            BatchStatus::Pending => ("pending", Style::default().fg(COLOR_DIM)),
+            BatchStatus::Running => ("running…", Style::default().fg(Color::Yellow)),
+            BatchStatus::Done(_) => ("✓ done", Style::default().fg(COLOR_OK)),
+            BatchStatus::Failed(e) => {
+                let _ = e;
+                ("✗ failed", Style::default().fg(COLOR_ERR))
+            }
+        };
+        let path_display = if item.path.len() > 60 {
+            format!("…{}", &item.path[item.path.len() - 57..])
+        } else {
+            item.path.clone()
+        };
+        Row::new(vec![
+            Cell::from(path_display),
+            Cell::from(status_text).style(status_style),
+        ])
+    }).collect();
+
+    let widths = [Constraint::Min(40), Constraint::Length(12)];
+    let table = Table::new(rows, widths)
+        .header(
+            Row::new(vec![
+                Cell::from("Path").style(Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD)),
+                Cell::from("Status").style(Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD)),
+            ])
+            .bottom_margin(1),
+        );
+    f.render_widget(table, chunks[2]);
+}
+
 pub fn draw_status_tab(f: &mut Frame, app: &App, area: Rect) {
     let loading_suffix = if app.status_loading {
         " (loading…)"
@@ -1073,8 +1285,9 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         let hints = match app.tab {
             0 => " r:refresh  d:delete  o:download  m:mirror  s:sort  /:filter  ↑↓/jk  Tab  ?  q",
             1 => " i:edit-path  Enter:upload  Esc:clear  Tab:next  ?:help  q:quit",
-            2 => " r:refresh  Tab:next  ?:help  q:quit",
-            3 => " g:generate  Tab:next  ?:help  q:quit",
+            2 => " i:edit  Enter:add/start  x:remove-last  Tab:next  ?:help  q:quit",
+            3 => " r:refresh  Tab:next  ?:help  q:quit",
+            4 => " g:generate  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -1357,6 +1570,20 @@ pub async fn run_loop(
                     continue;
                 }
 
+                if app.batch_input_mode {
+                    match key.code {
+                        KeyCode::Esc => app.batch_input_mode = false,
+                        KeyCode::Enter => {
+                            app.add_batch_path();
+                            app.batch_input_mode = false;
+                        }
+                        KeyCode::Backspace => { app.batch_input.pop(); }
+                        KeyCode::Char(c) => app.batch_input.push(c),
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 match app.tab {
                     0 => match key.code {
                         KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
@@ -1378,12 +1605,18 @@ pub async fn run_loop(
                         }
                         _ => {}
                     },
-                    2 => {
+                    2 => match key.code {
+                        KeyCode::Char('i') => app.batch_input_mode = true,
+                        KeyCode::Enter => app.start_batch_upload(),
+                        KeyCode::Char('x') => app.remove_last_batch_item(),
+                        _ => {}
+                    },
+                    3 => {
                         if key.code == KeyCode::Char('r') {
                             app.refresh_status();
                         }
                     }
-                    3 => {
+                    4 => {
                         if key.code == KeyCode::Char('g') {
                             app.generate_keypair();
                         }

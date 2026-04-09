@@ -1,4 +1,5 @@
-//! blossom-tui — gitui-inspired Terminal User Interface for Blossom blob storage.
+//! blossom-tui — gitui-inspired Terminal User Interface for Blossom blob
+//! storage.
 //!
 //! Multi-tab keyboard-driven TUI for managing blobs on a Blossom server.
 //!
@@ -8,10 +9,7 @@
 //! - **Status** — fetch and display `/status` JSON
 //! - **Keygen** — generate a fresh BIP-340 keypair
 
-use std::cmp::Reverse;
-use std::io::Stdout;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{cmp::Reverse, io::Stdout, path::PathBuf, time::Duration};
 
 use blossom_rs::{BlobDescriptor, BlossomClient, BlossomSigner, Signer};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -41,7 +39,8 @@ pub const COLOR_DIM: Color = Color::DarkGray;
 pub const COLOR_SELECTED_BG: Color = Color::Blue;
 pub const COLOR_TITLE_BG: Color = Color::DarkGray;
 
-// ── Sort/Filter ───────────────────────────────────────────────────────────────
+// ── Sort/Filter
+// ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,7 +81,8 @@ pub enum Modal {
     Mirror,
 }
 
-// ── Async messages ────────────────────────────────────────────────────────────
+// ── Async messages
+// ────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum AppMsg {
@@ -148,7 +148,8 @@ impl Nip34EventItem {
     }
 }
 
-// ── Batch upload ──────────────────────────────────────────────────────────────
+// ── Batch upload
+// ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub enum BatchStatus {
@@ -164,7 +165,8 @@ pub struct BatchItem {
     pub status: BatchStatus,
 }
 
-// ── App state ─────────────────────────────────────────────────────────────────
+// ── App state
+// ─────────────────────────────────────────────────────────────────
 
 pub struct KeygenResult {
     pub hex_secret: String,
@@ -980,7 +982,8 @@ impl App {
         });
     }
 
-    /// Connect to a NIP-34 Nostr relay via WebSocket and subscribe to NIP-34 events.
+    /// Connect to a NIP-34 Nostr relay via WebSocket and subscribe to NIP-34
+    /// events.
     pub fn connect_nip34_relay(&mut self) {
         let relay = self.nip34_relay.trim().to_string();
         if relay.is_empty() {
@@ -1072,7 +1075,8 @@ impl App {
                                     .ok();
                                 }
                             } else if arr.get(0).and_then(|v| v.as_str()) == Some("EOSE") {
-                                // End of stored events — keep connection alive for live updates
+                                // End of stored events — keep connection alive
+                                // for live updates
                             } else if arr.get(0).and_then(|v| v.as_str()) == Some("NOTICE") {
                                 let notice = arr
                                     .get(1)
@@ -1188,7 +1192,8 @@ impl App {
     }
 }
 
-// ── Drawing ───────────────────────────────────────────────────────────────────
+// ── Drawing
+// ───────────────────────────────────────────────────────────────────
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -2417,7 +2422,8 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect) {
     f.render_widget(help, popup_area);
 }
 
-// ── Main event loop ───────────────────────────────────────────────────────────
+// ── Main event loop
+// ───────────────────────────────────────────────────────────
 
 pub async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -2647,7 +2653,8 @@ pub async fn run_loop(
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers
+// ───────────────────────────────────────────────────────────────────
 
 /// Format a Unix timestamp as a compact date string (YYYY-MM-DD HH:MM).
 pub fn chrono_fmt_unix(ts: u64) -> String {
@@ -2777,7 +2784,8 @@ pub fn decode_secret_key(input: &str) -> Result<String, String> {
     }
 }
 
-// ── Persistent state ──────────────────────────────────────────────────────────
+// ── Persistent state
+// ──────────────────────────────────────────────────────────
 
 /// User-facing configuration and UI preferences persisted between sessions.
 ///

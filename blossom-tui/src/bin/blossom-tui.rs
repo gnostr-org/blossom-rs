@@ -50,7 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-fn parse_args(saved: &blossom_tui::TuiState) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+fn parse_args(
+    saved: &blossom_tui::TuiState,
+) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
     // Priority: CLI arg > env var > saved state > compiled default.
     let mut server = saved
         .server

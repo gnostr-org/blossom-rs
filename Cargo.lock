@@ -1326,11 +1326,13 @@ dependencies = [
  "bech32",
  "blossom-rs",
  "crossterm",
+ "futures-util",
  "hex",
  "ratatui",
  "reqwest 0.12.28",
  "serde_json",
  "tokio",
+ "tokio-tungstenite 0.26.2",
 ]
 
 [[package]]
@@ -7820,6 +7822,7 @@ dependencies = [
  "futures-util",
  "log",
  "rustls 0.23.37",
+ "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.4",

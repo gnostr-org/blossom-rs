@@ -1,0 +1,105 @@
+name: Build Blossom Binary
+description: >
+  Builds, bundles, smoke-tests, and uploads a blossom release artifact
+  for a given Rust cross-compile target.
+
+inputs:
+  name_prefix:
+    description: 'Artifact name prefix (e.g. blossom or blossom-tui)'
+    required: true
+  cargo_args:
+    description: 'cargo build arguments after --release --locked --target <target> (e.g. -p blossom-server -p blossom-cli)'
+    required: true
+  binaries:
+    description: 'Space-separated list of binary names without .exe extension'
+    required: true
+  target:
+    description: 'Rust target triple (e.g. x86_64-unknown-linux-gnu)'
+    required: true
+  build:
+    description: 'Build label used to detect windows (e.g. linux-x64, windows-x64)'
+    required: true
+  native:
+    description: 'Run smoke tests ("true" / "false")'
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Set build name
+      shell: bash
+      run: |
+        SAFE_REF="${GITHUB_REF_NAME//\//-}"
+        echo "BUILD_NAME=${{ inputs.name_prefix }}-${SAFE_REF}-${{ inputs.target }}" >> "$GITHUB_ENV"
+
+    - name: Fetch tags
+      shell: bash
+      run: git fetch --tags --force
+
+    - name: Cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install Linux system dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev pkg-config musl-tools
+
+    - name: Install cross
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cross
+
+    - name: Build release binary
+      shell: bash
+      run: cross build --verbose --release --locked --target ${{ inputs.target }} ${{ inputs.cargo_args }}
+
+    - name: Bundle release (Unix)
+      if: inputs.build != 'windows-x64'
+      shell: bash
+      run: |
+        mkdir -p "$BUILD_NAME"
+        cp README.md LICENSE "$BUILD_NAME/"
+        for bin in ${{ inputs.binaries }}; do
+          cp "target/${{ inputs.target }}/release/$bin" "$BUILD_NAME/"
+        done
+
+    - name: Bundle release (Windows)
+      if: inputs.build == 'windows-x64'
+      shell: bash
+      run: |
+        mkdir -p "$BUILD_NAME"
+        cp README.md LICENSE "$BUILD_NAME/"
+        for bin in ${{ inputs.binaries }}; do
+          cp "target/${{ inputs.target }}/release/${bin}.exe" "$BUILD_NAME/"
+        done
+
+    - name: Run smoke test (Unix)
+      if: inputs.native == 'true' && inputs.build != 'windows-x64'
+      shell: bash
+      run: |
+        for bin in ${{ inputs.binaries }}; do
+          "$BUILD_NAME/$bin" --version
+        done
+
+    - name: Run smoke test (Windows)
+      if: inputs.native == 'true' && inputs.build == 'windows-x64'
+      shell: bash
+      run: |
+        for bin in ${{ inputs.binaries }}; do
+          "$BUILD_NAME/${bin}.exe" --version
+        done
+
+    - name: Upload asset
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.BUILD_NAME }}
+        path: ${{ env.BUILD_NAME }}

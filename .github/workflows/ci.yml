@@ -2,36 +2,240 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: ["**"]
   pull_request:
     branches: [master]
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      fail-fast:
+        description: 'Stop all matrix jobs on first failure'
+        required: false
+        default: 'true'
+        type: boolean
+      job:
+        description: 'Job to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - ci-trusted
+          - ci-pr
+          - feature-matrix
+      targets:
+        description: 'Cargo targets to build'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - lib
+          - bins
+          - tests
+          - examples
+          - benches
 
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Trusted CI — runs on self-hosted runner for pushes to master.
   ci-trusted:
-    if: github.event_name == 'push'
+    if: |
+      github.repository == 'MonumentalSystems/blossom-rs' && (
+      github.event_name == 'pull_request' ||
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-trusted'))
+      )
     runs-on: self-hosted
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
+      - run: cargo clean
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Resolve build targets
+        id: targets
+        shell: bash
+        run: |
+          case "${{ inputs.targets || 'all' }}" in
+            all)      echo "flag=--all-targets" >> "$GITHUB_OUTPUT" ;;
+            *)        echo "flag=--${{ inputs.targets }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - run: cargo build --workspace ${{ steps.targets.outputs.flag }}
       - run: cargo test --workspace
+      - run: cargo test --features iroh-transport --test iroh_integration
+      - run: cargo clippy --workspace -- -D warnings
 
-  # PR CI — runs on GitHub-hosted runner for pull requests.
+  # PR CI — runs on GitHub-hosted runners across OS matrix for pull requests.
   ci-pr:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    strategy:
+      fail-fast: ${{ inputs.fail-fast != 'false' }}
+      matrix:
+        include:
+          - os: ubuntu-latest
+            timeout: 30
+          - os: windows-latest
+            timeout: 30
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Resolve build targets
+        id: targets
+        shell: bash
+        run: |
+          case "${{ inputs.targets || 'all' }}" in
+            all)      echo "flag=--all-targets" >> "$GITHUB_OUTPUT" ;;
+            *)        echo "flag=--${{ inputs.targets }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - run: cargo build --workspace ${{ steps.targets.outputs.flag }}
+      - run: cargo run -p blossom-cli -- -V
+      - run: cargo run -p blossom-server -- -V
       - run: cargo test --workspace
+      - run: cargo test --features iroh-transport --test iroh_integration
+      - run: cargo clippy --workspace -- -D warnings
+
+  # Ping job: times out after 5 min if macos-15-intel runner is unavailable.
+  # timeout-minutes counts from job creation (includes queue time).
+  ci-pr-macos-intel-ping:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    runs-on: macos-15-intel
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - run: echo "macos-15-intel runner available"
+
+  ci-pr-macos-intel:
+    needs: ci-pr-macos-intel-ping
+    if: |
+      needs.ci-pr-macos-intel-ping.result == 'success' && (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+        github.event_name == 'workflow_call' ||
+        (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+      )
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - name: Resolve build targets
+        id: targets
+        shell: bash
+        run: |
+          case "${{ inputs.targets || 'all' }}" in
+            all)      echo "flag=--all-targets" >> "$GITHUB_OUTPUT" ;;
+            *)        echo "flag=--${{ inputs.targets }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - run: cargo build --workspace ${{ steps.targets.outputs.flag }}
+      - run: cargo run -p blossom-cli -- -V
+      - run: cargo run -p blossom-server -- -V
+      - run: cargo test --workspace
+      - run: cargo test --features iroh-transport --test iroh_integration
+      - run: cargo clippy --workspace -- -D warnings
+
+  ci-pr-macos-arm:
+    needs: ci-pr-macos-intel
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    runs-on: macos-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - name: Resolve build targets
+        id: targets
+        shell: bash
+        run: |
+          case "${{ inputs.targets || 'all' }}" in
+            all)      echo "flag=--all-targets" >> "$GITHUB_OUTPUT" ;;
+            *)        echo "flag=--${{ inputs.targets }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - run: cargo build --workspace ${{ steps.targets.outputs.flag }}
+      - run: cargo run -p blossom-cli -- -V
+      - run: cargo run -p blossom-server -- -V
+      - run: cargo test --workspace
+      - run: cargo test --features iroh-transport --test iroh_integration
+      - run: cargo clippy --workspace -- -D warnings
+
+  # Ping job: times out after 5 min if ubuntu-latest runner is unavailable.
+  # timeout-minutes counts from job creation (includes queue time).
+  ci-pr-ubuntu-latest-ping:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.repository != 'MonumentalSystems/blossom-rs') ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'ci-pr'))
+    runs-on: macos-15-intel
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - run: echo "ubuntu-latest runner available"
+
+  # Feature matrix — verifies key feature combinations on PRs and manual dispatch.
+  feature-matrix:
+    needs: ci-pr-ubuntu-latest-ping
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'all' || inputs.job == 'feature-matrix'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: ${{ inputs.fail-fast != 'false' }}
+      matrix:
+        include:
+          - label: no-default
+            flags: --no-default-features
+          - label: client-only
+            flags: --no-default-features --features client
+          - label: client-filesystem
+            flags: --no-default-features --features client,filesystem
+          - label: lfs-only
+            flags: --no-default-features --features lfs
+          - label: server-only
+            flags: --no-default-features --features server
+          - label: default
+            flags: ""
+          - label: default-db-sqlite
+            flags: --features db-sqlite
+          - label: all-features
+            flags: --all-features
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - name: cargo test (${{ matrix.label }})
+        run: cargo test ${{ matrix.flags }}

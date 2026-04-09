@@ -364,8 +364,8 @@ mod tests {
 
     #[test]
     fn multi_clone_returns_first_url() {
-        // YouBlossom has two URLs in the clone tag — first wins
         let url = extract_web_url(&event_youblossom()).unwrap();
+        eprintln!("multi_clone_returns_first_url => {url}");
         assert_eq!(
             url,
             "https://git.shakespeare.diy/npub1ts0wenlst23l73au2magp0zuy49gadnu8297955mlxc592jh5ldq0xzwcx/YouBlossom.git"
@@ -375,6 +375,7 @@ mod tests {
     #[test]
     fn single_clone_returned() {
         let url = extract_web_url(&event_fresh_repo()).unwrap();
+        eprintln!("single_clone_returned => {url}");
         assert_eq!(
             url,
             "https://blossom.gnostr.cloud/npub1k9tkawv6ga6ptz3jl30pjzh68hk5mgvl28al5zc6r0myy849wvaq38a70g/fresh-repo.git"
@@ -383,21 +384,22 @@ mod tests {
 
     #[test]
     fn clone_takes_priority_over_web() {
-        // jmp has both clone and web; clone should win
         let url = extract_web_url(&event_jmp()).unwrap();
+        eprintln!("clone_takes_priority_over_web => {url}");
         assert!(url.starts_with("https://relay.ngit.dev/"), "expected ngit clone, got: {url}");
     }
 
     #[test]
     fn falls_back_to_web_when_no_clone() {
-        // Beer has no clone tag — falls back to web
         let url = extract_web_url(&event_beer()).unwrap();
+        eprintln!("falls_back_to_web_when_no_clone => {url}");
         assert_eq!(url, "https://iBeer.shakespeare.wtf");
     }
 
     #[test]
     fn satshoot_first_clone_url() {
         let url = extract_web_url(&event_satshoot()).unwrap();
+        eprintln!("satshoot_first_clone_url => {url}");
         assert!(
             url.starts_with("https://grasp.budabit.club/"),
             "expected budabit.club as first clone, got: {url}"
@@ -406,7 +408,9 @@ mod tests {
 
     #[test]
     fn empty_event_returns_none() {
-        assert!(extract_web_url(&event_empty()).is_none());
+        let result = extract_web_url(&event_empty());
+        eprintln!("empty_event_returns_none => {result:?}");
+        assert!(result.is_none());
     }
 
     // ── extract_event_relays ──────────────────────────────────────────────
@@ -414,7 +418,7 @@ mod tests {
     #[test]
     fn extract_relays_from_youblossom() {
         let relays = extract_event_relays(&event_youblossom());
-        // Trailing slashes must be stripped
+        eprintln!("extract_relays_from_youblossom => {relays:?}");
         assert!(relays.contains(&"wss://git.shakespeare.diy".to_string()));
         assert!(relays.contains(&"wss://relay.ngit.dev".to_string()));
         assert!(relays.contains(&"wss://nos.lol".to_string()));
@@ -424,6 +428,7 @@ mod tests {
     #[test]
     fn extract_relays_trailing_slashes_stripped() {
         let relays = extract_event_relays(&event_youblossom());
+        eprintln!("extract_relays_trailing_slashes_stripped => {relays:?}");
         for r in &relays {
             assert!(!r.ends_with('/'), "relay has trailing slash: {r}");
         }
@@ -432,12 +437,15 @@ mod tests {
     #[test]
     fn extract_relays_single_entry() {
         let relays = extract_event_relays(&event_fresh_repo());
+        eprintln!("extract_relays_single_entry => {relays:?}");
         assert_eq!(relays, vec!["wss://blossom.gnostr.cloud"]);
     }
 
     #[test]
     fn extract_relays_no_tag_returns_empty() {
-        assert!(extract_event_relays(&event_empty()).is_empty());
+        let relays = extract_event_relays(&event_empty());
+        eprintln!("extract_relays_no_tag_returns_empty => {relays:?}");
+        assert!(relays.is_empty());
     }
 
     #[test]
@@ -446,6 +454,7 @@ mod tests {
             "tags": [["relays", "relay.damus.io", "nos.lol"]]
         });
         let relays = extract_event_relays(&event);
+        eprintln!("extract_relays_normalises_bare_hosts => {relays:?}");
         assert_eq!(relays[0], "wss://relay.damus.io");
         assert_eq!(relays[1], "wss://nos.lol");
     }
@@ -454,48 +463,50 @@ mod tests {
 
     #[test]
     fn normalize_bare_hostname() {
-        assert_eq!(normalize_relay_url("relay.damus.io"), "wss://relay.damus.io");
+        let out = normalize_relay_url("relay.damus.io");
+        eprintln!("normalize_bare_hostname: relay.damus.io => {out}");
+        assert_eq!(out, "wss://relay.damus.io");
     }
 
     #[test]
     fn normalize_bare_host_port() {
-        assert_eq!(normalize_relay_url("localhost:7777"), "wss://localhost:7777");
+        let out = normalize_relay_url("localhost:7777");
+        eprintln!("normalize_bare_host_port: localhost:7777 => {out}");
+        assert_eq!(out, "wss://localhost:7777");
     }
 
     #[test]
     fn normalize_wss_passthrough() {
-        assert_eq!(
-            normalize_relay_url("wss://relay.nostr.band"),
-            "wss://relay.nostr.band"
-        );
+        let out = normalize_relay_url("wss://relay.nostr.band");
+        eprintln!("normalize_wss_passthrough: wss://relay.nostr.band => {out}");
+        assert_eq!(out, "wss://relay.nostr.band");
     }
 
     #[test]
     fn normalize_ws_passthrough() {
-        assert_eq!(normalize_relay_url("ws://localhost:7777"), "ws://localhost:7777");
+        let out = normalize_relay_url("ws://localhost:7777");
+        eprintln!("normalize_ws_passthrough: ws://localhost:7777 => {out}");
+        assert_eq!(out, "ws://localhost:7777");
     }
 
     #[test]
     fn normalize_https_to_wss() {
-        assert_eq!(
-            normalize_relay_url("https://relay.example.com"),
-            "wss://relay.example.com"
-        );
+        let out = normalize_relay_url("https://relay.example.com");
+        eprintln!("normalize_https_to_wss: https://relay.example.com => {out}");
+        assert_eq!(out, "wss://relay.example.com");
     }
 
     #[test]
     fn normalize_http_to_ws() {
-        assert_eq!(
-            normalize_relay_url("http://localhost:7777"),
-            "ws://localhost:7777"
-        );
+        let out = normalize_relay_url("http://localhost:7777");
+        eprintln!("normalize_http_to_ws: http://localhost:7777 => {out}");
+        assert_eq!(out, "ws://localhost:7777");
     }
 
     #[test]
     fn normalize_trailing_slash_handled_by_caller() {
-        // normalize_relay_url does NOT strip trailing slash — callers do
-        // (extract_event_relays strips it before calling)
         let r = normalize_relay_url("wss://relay.damus.io/");
+        eprintln!("normalize_trailing_slash_handled_by_caller: wss://relay.damus.io/ => {r}");
         assert_eq!(r, "wss://relay.damus.io/");
     }
 
@@ -504,12 +515,14 @@ mod tests {
     #[test]
     fn relay_list_primary_first() {
         let list = build_relay_list(Some("wss://my-relay.example.com"));
+        eprintln!("relay_list_primary_first => {list:?}");
         assert_eq!(list[0], "wss://my-relay.example.com");
     }
 
     #[test]
     fn relay_list_no_duplicates() {
         let list = build_relay_list(Some("wss://relay.damus.io"));
+        eprintln!("relay_list_no_duplicates => {list:?}");
         let count = list.iter().filter(|r| r.as_str() == "wss://relay.damus.io").count();
         assert_eq!(count, 1, "damus should appear once: {list:?}");
     }
@@ -517,6 +530,7 @@ mod tests {
     #[test]
     fn relay_list_without_primary_uses_defaults() {
         let list = build_relay_list(None);
+        eprintln!("relay_list_without_primary_uses_defaults => {list:?}");
         assert!(!list.is_empty());
         assert_eq!(list[0], DEFAULT_RELAY_FALLBACKS[0]);
     }
@@ -524,6 +538,7 @@ mod tests {
     #[test]
     fn relay_list_normalises_primary() {
         let list = build_relay_list(Some("relay.damus.io"));
+        eprintln!("relay_list_normalises_primary: relay.damus.io => {list:?}");
         assert_eq!(list[0], "wss://relay.damus.io");
     }
 
@@ -533,6 +548,7 @@ mod tests {
     fn npub_bech32_roundtrip() {
         let npub = "npub1ahaz04ya9tehace3uy39hdhdryfvdkve9qdndkqp3tvehs6h8s5slq45hy";
         let hex = npub_to_hex(npub).expect("valid npub");
+        eprintln!("npub_bech32_roundtrip: {npub} => {hex}");
         assert_eq!(hex.len(), 64);
         assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -540,18 +556,21 @@ mod tests {
     #[test]
     fn npub_hex_passthrough() {
         let hex = "ee".repeat(32);
-        assert_eq!(npub_to_hex(&hex).unwrap(), hex);
+        let out = npub_to_hex(&hex).unwrap();
+        eprintln!("npub_hex_passthrough: {hex} => {out}");
+        assert_eq!(out, hex);
     }
 
     #[test]
     fn npub_hex_uppercased_normalised_to_lowercase() {
         let upper = "EE".repeat(32);
-        assert_eq!(npub_to_hex(&upper).unwrap(), "ee".repeat(32));
+        let out = npub_to_hex(&upper).unwrap();
+        eprintln!("npub_hex_uppercased_normalised_to_lowercase: {upper} => {out}");
+        assert_eq!(out, "ee".repeat(32));
     }
 
     #[test]
     fn npub_real_pubkeys_from_events() {
-        // Real pubkeys seen in the queried events
         for hex in [
             "5c1eeccff05aa3ff47bc56fa80bc5c254a8eb67c3a8be2d29bf9b142aa57a7da",
             "b1576eb99a4774158a32fc5e190afa3ded4da19f51fbfa0b1a1bf6421ea5733a",
@@ -560,14 +579,17 @@ mod tests {
             "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90",
         ] {
             let out = npub_to_hex(hex).unwrap_or_else(|_| panic!("failed for {hex}"));
+            eprintln!("npub_real_pubkeys_from_events: {hex} => {out}");
             assert_eq!(out, hex, "hex pubkey should pass through unchanged");
         }
     }
 
     #[test]
     fn npub_invalid_rejected() {
-        assert!(npub_to_hex("not-a-key").is_err());
-        assert!(npub_to_hex("npub1bad!").is_err());
-        assert!(npub_to_hex("").is_err());
+        for bad in ["not-a-key", "npub1bad!", ""] {
+            let result = npub_to_hex(bad);
+            eprintln!("npub_invalid_rejected: {bad:?} => {result:?}");
+            assert!(result.is_err());
+        }
     }
 }

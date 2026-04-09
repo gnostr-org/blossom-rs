@@ -339,6 +339,8 @@ mod tests {
     fn bug_report_url_three_segment() {
         let url = format!("nostr://{NPUB}/nostr.cro.social/gnostr");
         let (relay, pubkey, repo) = parse_nostr_url_inner(&url, None).expect("should parse");
+        eprintln!("bug_report_url_three_segment: {url}");
+        eprintln!("  relay={relay}  pubkey={pubkey:.16}…  repo={repo}");
         assert_eq!(relay, "wss://nostr.cro.social");
         assert_eq!(pubkey, hex_of_npub());
         assert_eq!(repo, "gnostr");
@@ -350,20 +352,18 @@ mod tests {
     fn embedded_relay_bare_host() {
         let url = format!("nostr://{NPUB}/relay.damus.io/my-repo");
         let (relay, _, repo) = parse_nostr_url_inner(&url, None).unwrap();
+        eprintln!("embedded_relay_bare_host: {url}");
+        eprintln!("  relay={relay}  repo={repo}");
         assert_eq!(relay, "wss://relay.damus.io");
         assert_eq!(repo, "my-repo");
     }
 
     #[test]
     fn embedded_relay_wss_scheme() {
-        // Middle segment already has wss:// — should pass through
-        // URL: nostr://<npub>/wss://relay.example.com/repo
-        // After stripping nostr:// → "<npub>/wss://relay.example.com/repo"
-        // splitn(3, '/') → ["<npub>", "wss:", "/relay.example.com/repo"]
-        // The "wss:" segment doesn't look like a hostname, so let's verify error path
-        // and that users should use nostr+wss:// instead
         let url = format!("nostr+wss://relay.example.com/{NPUB}/my-repo");
         let (relay, _, repo) = parse_nostr_url_inner(&url, None).unwrap();
+        eprintln!("embedded_relay_wss_scheme: {url}");
+        eprintln!("  relay={relay}  repo={repo}");
         assert_eq!(relay, "wss://relay.example.com");
         assert_eq!(repo, "my-repo");
     }
@@ -371,14 +371,9 @@ mod tests {
     #[test]
     fn embedded_relay_https_swapped_to_wss() {
         let url = format!("nostr://{NPUB}/https://relay.example.com/my-repo");
-        // splitn(3) → [npub, "https:", "relay.example.com/my-repo"]
-        // "https:" starts with "https://"? No — it's "https:" not "https://"
-        // The normaliser sees "https:" as a bare hostname (no dot) → wss://https:
-        // This case needs careful handling. Test what the parser actually does.
-        // The point: it shouldn't panic, should produce *some* relay and repo.
         let result = parse_nostr_url_inner(&url, None);
-        // We expect either an error or a parsed result — not a panic.
-        // The actual segment is "https:" (no dot) → this will hit the ambiguous bail.
+        eprintln!("embedded_relay_https_swapped_to_wss: {url}");
+        eprintln!("  result={result:?}");
         assert!(result.is_err() || result.is_ok());
     }
 
@@ -388,6 +383,8 @@ mod tests {
     fn two_segment_no_relay_is_error() {
         let url = format!("nostr://{NPUB}/gnostr");
         let err = parse_nostr_url_inner(&url, None).unwrap_err();
+        eprintln!("two_segment_no_relay_is_error: {url}");
+        eprintln!("  error={err}");
         assert!(
             err.to_string().contains("no relay in URL and NOSTR_RELAY env var not set"),
             "unexpected error: {err}"
@@ -399,6 +396,8 @@ mod tests {
         let url = format!("nostr://{NPUB}/my-repo");
         let (relay, pubkey, repo) =
             parse_nostr_url_inner(&url, Some("wss://relay.damus.io")).unwrap();
+        eprintln!("two_segment_relay_from_env: {url}");
+        eprintln!("  relay={relay}  pubkey={pubkey:.16}…  repo={repo}");
         assert_eq!(relay, "wss://relay.damus.io");
         assert_eq!(pubkey, hex_of_npub());
         assert_eq!(repo, "my-repo");
@@ -408,6 +407,7 @@ mod tests {
     fn env_relay_bare_host_normalised() {
         let url = format!("nostr://{NPUB}/my-repo");
         let (relay, _, _) = parse_nostr_url_inner(&url, Some("relay.damus.io")).unwrap();
+        eprintln!("env_relay_bare_host_normalised: relay.damus.io => {relay}");
         assert_eq!(relay, "wss://relay.damus.io");
     }
 
@@ -416,6 +416,7 @@ mod tests {
         let url = format!("nostr://{NPUB}/my-repo");
         let (relay, _, _) =
             parse_nostr_url_inner(&url, Some("https://relay.damus.io")).unwrap();
+        eprintln!("env_relay_https_normalised_to_wss: https://relay.damus.io => {relay}");
         assert_eq!(relay, "wss://relay.damus.io");
     }
 
@@ -423,9 +424,10 @@ mod tests {
 
     #[test]
     fn scheme_relay_takes_precedence() {
-        // nostr+wss://explicit/<npub>/embedded-relay/repo
         let url = format!("nostr+wss://explicit.relay.com/{NPUB}/other.relay.com/gnostr");
         let (relay, _, repo) = parse_nostr_url_inner(&url, None).unwrap();
+        eprintln!("scheme_relay_takes_precedence: {url}");
+        eprintln!("  relay={relay}  repo={repo}");
         assert_eq!(relay, "wss://explicit.relay.com");
         assert_eq!(repo, "gnostr");
     }
@@ -434,6 +436,8 @@ mod tests {
     fn nostr_plus_ws_plaintext() {
         let url = format!("nostr+ws://localhost:7777/{NPUB}/my-repo");
         let (relay, _, repo) = parse_nostr_url_inner(&url, None).unwrap();
+        eprintln!("nostr_plus_ws_plaintext: {url}");
+        eprintln!("  relay={relay}  repo={repo}");
         assert_eq!(relay, "ws://localhost:7777");
         assert_eq!(repo, "my-repo");
     }
@@ -445,6 +449,7 @@ mod tests {
         let hex_pub = hex_of_npub();
         let url = format!("nostr://{hex_pub}/relay.damus.io/my-repo");
         let (_, pubkey, _) = parse_nostr_url_inner(&url, None).unwrap();
+        eprintln!("hex_pubkey_accepted: hex={pubkey:.16}…");
         assert_eq!(pubkey, hex_pub);
     }
 
@@ -454,6 +459,7 @@ mod tests {
     fn git_suffix_stripped_three_segment() {
         let url = format!("nostr://{NPUB}/nostr.cro.social/gnostr.git");
         let (_, _, repo) = parse_nostr_url_inner(&url, None).unwrap();
+        eprintln!("git_suffix_stripped_three_segment: gnostr.git => {repo}");
         assert_eq!(repo, "gnostr");
     }
 
@@ -462,6 +468,7 @@ mod tests {
         let url = format!("nostr://{NPUB}/my-repo.git");
         let (_, _, repo) =
             parse_nostr_url_inner(&url, Some("wss://relay.example.com")).unwrap();
+        eprintln!("git_suffix_stripped_two_segment: my-repo.git => {repo}");
         assert_eq!(repo, "my-repo");
     }
 
@@ -473,9 +480,9 @@ mod tests {
             Some("wss://url-relay.example.com"),
             Some("wss://env-relay.example.com"),
         );
+        eprintln!("relay_list_url_first_then_env_then_defaults => {list:?}");
         assert_eq!(list[0], "wss://url-relay.example.com");
         assert_eq!(list[1], "wss://env-relay.example.com");
-        // fallbacks follow
         assert!(list.len() > 2);
     }
 
@@ -485,6 +492,7 @@ mod tests {
             Some("wss://relay.damus.io"),
             Some("wss://relay.damus.io"),
         );
+        eprintln!("relay_list_no_duplicates_across_sources => {list:?}");
         let count = list.iter().filter(|r| r.as_str() == "wss://relay.damus.io").count();
         assert_eq!(count, 1, "damus should appear once: {list:?}");
     }
@@ -492,6 +500,7 @@ mod tests {
     #[test]
     fn relay_list_no_url_relay_env_is_first() {
         let list = build_relay_list_with_env(None, Some("wss://env-relay.example.com"));
+        eprintln!("relay_list_no_url_relay_env_is_first => {list:?}");
         assert_eq!(list[0], "wss://env-relay.example.com");
     }
 }

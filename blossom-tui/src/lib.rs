@@ -570,6 +570,7 @@ pub struct App {
     pub show_help: bool,
     pub show_docs: bool,
     pub docs_scroll: u16,
+    pub needs_clear: bool,  // force full terminal repaint on next frame
     pub notification: Option<(String, bool)>, // (message, is_error)
     pub modal: Option<Modal>,
     pub modal_input: String,
@@ -688,6 +689,7 @@ impl App {
             show_help: false,
             show_docs: false,
             docs_scroll: 0,
+            needs_clear: false,
             notification: None,
             modal: None,
             modal_input: String::new(),
@@ -4663,6 +4665,11 @@ pub async fn run_loop(
             app.apply(msg);
         }
 
+        if app.needs_clear {
+            app.needs_clear = false;
+            tokio::task::block_in_place(|| terminal.clear())?;
+        }
+
         terminal.draw(|f| draw(f, app))?;
 
         let has_event = tokio::task::block_in_place(|| event::poll(Duration::from_millis(100)))?;
@@ -4720,16 +4727,26 @@ pub async fn run_loop(
                 }
 
                 if !app.input_mode && key.code == KeyCode::Char('?') {
-                    app.show_help = !app.show_help;
-                    app.show_docs = false;
+                    if app.show_help {
+                        app.show_help = false;
+                        app.needs_clear = true;
+                    } else {
+                        app.show_help = true;
+                        app.show_docs = false;
+                    }
                     app.notification = None;
                     continue;
                 }
 
                 if !app.input_mode && key.code == KeyCode::Char('\\') {
-                    app.show_docs = !app.show_docs;
-                    app.docs_scroll = 0;
-                    app.show_help = false;
+                    if app.show_docs {
+                        app.show_docs = false;
+                        app.needs_clear = true;
+                    } else {
+                        app.show_docs = true;
+                        app.docs_scroll = 0;
+                        app.show_help = false;
+                    }
                     app.notification = None;
                     continue;
                 }
@@ -4738,6 +4755,7 @@ pub async fn run_loop(
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('\\') => {
                             app.show_docs = false;
+                            app.needs_clear = true;
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
                             app.docs_scroll = app.docs_scroll.saturating_sub(1);
@@ -4764,6 +4782,7 @@ pub async fn run_loop(
 
                 if app.show_help {
                     app.show_help = false;
+                    app.needs_clear = true;
                     continue;
                 }
 

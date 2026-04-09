@@ -41,7 +41,7 @@ pub const COLOR_OK: Color = Color::Green;
 pub const COLOR_ERR: Color = Color::Red;
 pub const COLOR_DIM: Color = Color::DarkGray;
 pub const COLOR_SELECTED_BG: Color = Color::Blue;
-pub const COLOR_TITLE_BG: Color = Color::DarkGray;
+pub const COLOR_TITLE_BG: Color = Color::Rgb(24, 24, 48); // deep navy
 
 // ── Sort/Filter
 // ───────────────────────────────────────────────────────────────
@@ -2040,11 +2040,15 @@ pub fn draw_title_bar(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(
             format!(" {}", app.server),
-            Style::default().fg(Color::White).bg(COLOR_TITLE_BG),
+            Style::default()
+                .fg(Color::White)
+                .bg(COLOR_TITLE_BG),
         ),
         Span::styled(
             pubkey_info,
-            Style::default().fg(COLOR_DIM).bg(COLOR_TITLE_BG),
+            Style::default()
+                .fg(Color::Rgb(140, 140, 180)) // soft lavender on navy
+                .bg(COLOR_TITLE_BG),
         ),
     ]))
     .style(Style::default().bg(COLOR_TITLE_BG));
@@ -2057,12 +2061,15 @@ pub fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" blossom-tui "),
+                .title(" blossom-tui ")
+                .style(Style::default().bg(COLOR_TITLE_BG)),
         )
         .select(app.tab)
+        .style(Style::default().fg(COLOR_DIM).bg(COLOR_TITLE_BG))
         .highlight_style(
             Style::default()
                 .fg(COLOR_ACCENT)
+                .bg(COLOR_TITLE_BG)
                 .add_modifier(Modifier::BOLD),
         );
     f.render_widget(tabs, area);

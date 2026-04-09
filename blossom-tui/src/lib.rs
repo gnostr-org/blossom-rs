@@ -3843,12 +3843,12 @@ pub fn draw_profile_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
     // ── Hints ────────────────────────────────────────────────────────────────
     let (hint_left, hint_right) = if app.profile_editing {
-        ("Enter/Esc: finish edit  Backspace: delete", "")
+        ("Enter: next field  Esc: finish  Backspace: delete", "")
     } else if app.profile_relay_edit {
         ("Enter/Esc: finish  Type relay URL", "")
     } else {
         (
-            "1-6: select field  e/Enter: edit  r: relay  F: fetch  P: publish",
+            "↑↓: navigate  1-6: jump  e/Enter: edit  r: relay  F: fetch  P: publish",
             if app.profile_loading { "Loading…" } else { "" },
         )
     };
@@ -4793,8 +4793,14 @@ pub async fn run_loop(
                             }
                         } else if app.profile_editing {
                             match key.code {
-                                KeyCode::Enter | KeyCode::Esc => {
+                                KeyCode::Esc => {
                                     app.profile_editing = false;
+                                }
+                                KeyCode::Enter => {
+                                    // Commit edit, advance to next field.
+                                    app.profile_editing = false;
+                                    app.profile_edit_field =
+                                        (app.profile_edit_field + 1).min(5);
                                 }
                                 KeyCode::Char(c) => {
                                     match app.profile_edit_field {
@@ -4822,6 +4828,15 @@ pub async fn run_loop(
                             }
                         } else {
                             match key.code {
+                                KeyCode::Up => {
+                                    app.profile_edit_field =
+                                        app.profile_edit_field
+                                            .saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    app.profile_edit_field =
+                                        (app.profile_edit_field + 1).min(5);
+                                }
                                 KeyCode::Char('1') => app.profile_edit_field = 0,
                                 KeyCode::Char('2') => app.profile_edit_field = 1,
                                 KeyCode::Char('3') => app.profile_edit_field = 2,

@@ -5,6 +5,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
+use std::collections::HashMap;
 
 // ── Well-known public relays (fallback when none specified) ────────────────
 
@@ -242,6 +243,150 @@ pub fn npub_to_hex(npub: &str) -> Result<String> {
     } else {
         bail!("expected npub1… bech32 or 64-char hex pubkey, got: {npub}");
     }
+}
+
+// ── NIP-34 multi-kind helpers ─────────────────────────────────────────────
+
+/// Parse the `a` tag from any NIP-34 event that references a repository.
+///
+/// The `a` tag has one of two formats:
+/// - `"30617:<pubkey_hex>:<repo-id>"` — standard address
+/// - `"<npub>/<repo-id>"` — seen in some 1631 status events
+///
+/// Returns `(pubkey_hex, repo_id)` on success.
+pub fn extract_repo_addr(event: &Value) -> Option<(String, String)> {
+    let tags = event["tags"].as_array()?;
+    for tag in tags {
+        let arr = tag.as_array()?;
+        if arr.first().and_then(|v| v.as_str()) != Some("a") {
+            continue;
+        }
+        let val = arr.get(1).and_then(|v| v.as_str())?;
+        // Standard: "30617:<pubkey>:<repo-id>"
+        let parts: Vec<&str> = val.splitn(3, ':').collect();
+        if parts.len() == 3 {
+            return Some((parts[1].to_string(), parts[2].to_string()));
+        }
+        // Fallback: "npub1.../<repo-id>" (as seen in some status events)
+        if let Some((npub, repo)) = val.split_once('/') {
+            if let Ok(hex) = npub_to_hex(npub) {
+                return Some((hex, repo.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// Extract the current HEAD branch name from a kind:30618 (RepoState) event.
+///
+/// Reads the `["HEAD", "ref: refs/heads/<branch>"]` tag.
+/// Returns the bare branch name, e.g. `"main"`.
+pub fn extract_head_branch(event: &Value) -> Option<String> {
+    let tags = event["tags"].as_array()?;
+    for tag in tags {
+        let arr = tag.as_array()?;
+        if arr.first().and_then(|v| v.as_str()) != Some("HEAD") {
+            continue;
+        }
+        let val = arr.get(1).and_then(|v| v.as_str())?;
+        // "ref: refs/heads/main"
+        let branch = val
+            .strip_prefix("ref: refs/heads/")
+            .unwrap_or(val);
+        return Some(branch.to_string());
+    }
+    None
+}
+
+/// Extract all git refs from a kind:30618 (RepoState) event.
+///
+/// Returns a map of `"refs/heads/<branch>"` / `"refs/tags/<tag>"` → commit SHA.
+pub fn extract_refs(event: &Value) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(tags) = event["tags"].as_array() else {
+        return out;
+    };
+    for tag in tags {
+        let Some(arr) = tag.as_array() else { continue };
+        let Some(key) = arr.first().and_then(|v| v.as_str()) else { continue };
+        if !key.starts_with("refs/") {
+            continue;
+        }
+        if let Some(sha) = arr.get(1).and_then(|v| v.as_str()) {
+            out.insert(key.to_string(), sha.to_string());
+        }
+    }
+    out
+}
+
+/// Map a NIP-34 status kind number to a human-readable label.
+///
+/// - `1630` → `"open"`
+/// - `1631` → `"applied"`
+/// - `1632` → `"closed"`
+/// - `1633` → `"draft"`
+/// - anything else → `"unknown"`
+pub fn status_kind_str(kind: u64) -> &'static str {
+    match kind {
+        1630 => "open",
+        1631 => "applied",
+        1632 => "closed",
+        1633 => "draft",
+        _ => "unknown",
+    }
+}
+
+/// Extract the subject/title from a kind:1618 (PR) or kind:1621 (Issue) event.
+///
+/// Reads the first `["subject", "<text>"]` tag.
+pub fn extract_subject(event: &Value) -> Option<String> {
+    let tags = event["tags"].as_array()?;
+    for tag in tags {
+        let arr = tag.as_array()?;
+        if arr.first().and_then(|v| v.as_str()) == Some("subject") {
+            return arr.get(1).and_then(|v| v.as_str()).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// Extract the commit SHA tip from a NIP-34 event.
+///
+/// - kind:1617 (Patch): reads the `r` tag (earliest unique commit)
+/// - kind:1618 (PR): reads the `c` tag (commit tip)
+/// - kind:1631 (Applied): reads the `merge-commit` tag
+pub fn extract_tip_commit(event: &Value) -> Option<String> {
+    let tags = event["tags"].as_array()?;
+    // Try c tag (PR tip), then merge-commit, then r tag (patch commit ref)
+    for needle in &["c", "merge-commit", "r"] {
+        for tag in tags {
+            let arr = tag.as_array()?;
+            if arr.first().and_then(|v| v.as_str()) == Some(needle) {
+                if let Some(sha) = arr.get(1).and_then(|v| v.as_str()) {
+                    if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return Some(sha.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract labels from `t` tags on a kind:1621 (Issue) or kind:1618 (PR) event.
+pub fn extract_labels(event: &Value) -> Vec<String> {
+    let Some(tags) = event["tags"].as_array() else {
+        return vec![];
+    };
+    tags.iter()
+        .filter_map(|tag| {
+            let arr = tag.as_array()?;
+            if arr.first().and_then(|v| v.as_str()) != Some("t") {
+                return None;
+            }
+            arr.get(1).and_then(|v| v.as_str()).map(|s| s.to_string())
+        })
+        .collect()
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -907,5 +1052,347 @@ mod tests {
         let out = normalize_relay_url("wss://gleasonator.dev/relay");
         eprintln!("normalize_relay_gleasonator_path: wss://gleasonator.dev/relay => {out}");
         assert_eq!(out, "wss://gleasonator.dev/relay");
+    }
+
+    // ── New fixtures from gnostr query --kinds 30617,30618,1617,1618,1619,1621,1630,1631 ──
+
+    /// kind:30618 — vidstr repo: HEAD + single branch ref
+    fn event_30618_vidstr() -> Value {
+        serde_json::json!({
+            "kind": 30618,
+            "pubkey": "a8d1560d6a647d501699167246f237b36fb123f89168fda11dc743533fec7a08",
+            "tags": [
+                ["d", "vidstr"],
+                ["HEAD", "ref: refs/heads/main"],
+                ["refs/heads/main", "4f6724601d66ea5b5502bf9de8e3ee4dbce03b45"]
+            ]
+        })
+    }
+
+    /// kind:30618 — amethyst: many tags, a branch + HEAD (no clean HEAD tag in raw data, only refs/tags)
+    fn event_30618_amethyst() -> Value {
+        serde_json::json!({
+            "kind": 30618,
+            "pubkey": "460c25e682fda7832b52d1f22d3d22b3176d972f60dcdc3212ed8c92ef85065c",
+            "tags": [
+                ["d", "amethyst"],
+                ["refs/tags/v0.11.0", "eff961699c544f6ee33ef66b27cda33cc5e5afa3"],
+                ["refs/tags/v1.04.0", "503ebaeb725e705897da18b78b0f8494baec1e28"],
+                ["refs/tags/v0.88.6", "86d948bd95acd275f69ac5ef43cb579192f9a1ca"],
+                ["refs/heads/main", "4d8340a9d76a5b374617a2357ad5b89af6e7cd3d"],
+                ["refs/heads/recommendation-engine", "5753472a44f3908fef724820fb47ab8408a4eaf1"],
+                ["refs/heads/local-database", "7871236ce7c92f28d268010f7b0f920eb306c4ac"],
+                ["refs/heads/full-outbox", "340760513f278bef03b1eeb8c1fb3487dfca11a4"]
+            ]
+        })
+    }
+
+    /// kind:30618 — empty refs (repo stopped tracking state)
+    fn event_30618_empty_refs() -> Value {
+        serde_json::json!({
+            "kind": 30618,
+            "pubkey": "deadbeef00000000000000000000000000000000000000000000000000000001",
+            "tags": [
+                ["d", "my-repo"]
+            ]
+        })
+    }
+
+    /// kind:1617 — real patch event (nprogram repo)
+    fn event_1617_patch() -> Value {
+        serde_json::json!({
+            "kind": 1617,
+            "pubkey": "00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9",
+            "tags": [
+                ["alt", "git patch: [PATCH] examples(resonate): Read the event ID as i32_le"],
+                ["description", "[PATCH] examples(resonate): Read the event ID as i32_le"],
+                ["a", "30617:3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d:nprogram"],
+                ["p", "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"],
+                ["r", "fb30ddf36678dd287b47fe979838672fa4a740f3"],
+                ["t", "root"]
+            ],
+            "content": "From cfcc04e6 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] examples(resonate): Read the event ID as i32_le\n"
+        })
+    }
+
+    /// kind:1618 — real PR event (satshoot: Cashu payments)
+    fn event_1618_pr() -> Value {
+        serde_json::json!({
+            "kind": 1618,
+            "pubkey": "71df211931d26ee41121d295bd43cbc7e382505e333b5c13d4016ced9542d9d7",
+            "tags": [
+                ["a", "30617:d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90:satshoot"],
+                ["subject", "Cashu Payments with Locktime and Refund Public Key"],
+                ["t", "enhancement"],
+                ["c", "c318b8577faef1bc57671b61524af476e86ac800"],
+                ["clone", "https://github.com/rodant/satshoot.git"],
+                ["branch-name", "testing"],
+                ["merge-base", "78db010d6efcb936358461f0ea393eb63c5f9414"],
+                ["p", "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90"]
+            ],
+            "content": "Cashu payments in Nostr (Nutzaps) are perpetually locked..."
+        })
+    }
+
+    /// kind:1621 — issue with subject + labels (oba repo)
+    fn event_1621_issue() -> Value {
+        serde_json::json!({
+            "kind": 1621,
+            "pubkey": "15a747c71d64ebe7842ce2d9b6d26b83d8c53a49164dc3dc7dbfafd4b17d2fb0",
+            "tags": [
+                ["subject", "Hi nsec1jwa3tt2jcqy9aqz9f8qqny9jjt0qs9r5v7lvnncqp265e8k5ahkq547yh8"],
+                ["alt", "git repository issue: Hi ..."],
+                ["a", "30617:02719482b1c8e95a6dcc468af2c7bfdb6c0855dbc1ba6920bd6bc6201e350012:oba"],
+                ["p", "02719482b1c8e95a6dcc468af2c7bfdb6c0855dbc1ba6920bd6bc6201e350012"],
+                ["t", "bug"],
+                ["t", "security"]
+            ],
+            "content": "*NSEC_DELETED*"
+        })
+    }
+
+    /// kind:1630 — Open status linked to a PR
+    fn event_1630_open() -> Value {
+        serde_json::json!({
+            "kind": 1630,
+            "pubkey": "71df211931d26ee41121d295bd43cbc7e382505e333b5c13d4016ced9542d9d7",
+            "tags": [
+                ["e", "323f1cf29cf7119357e63a4f352af197ac21acbce936526a55f4118cb607cfd6", "", "root"],
+                ["p", "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90"],
+                ["p", "71df211931d26ee41121d295bd43cbc7e382505e333b5c13d4016ced9542d9d7"],
+                ["a", "30617:d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90:satshoot"],
+                ["r", "wss://relay.primal.net/"]
+            ],
+            "content": ""
+        })
+    }
+
+    /// kind:1631 — Applied/Merged status with merge-commit and applied-as-commits
+    fn event_1631_applied() -> Value {
+        serde_json::json!({
+            "kind": 1631,
+            "pubkey": "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90",
+            "tags": [
+                ["e", "323f1cf29cf7119357e63a4f352af197ac21acbce936526a55f4118cb607cfd6", "", "root"],
+                ["p", "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90"],
+                ["p", "71df211931d26ee41121d295bd43cbc7e382505e333b5c13d4016ced9542d9d7"],
+                ["a", "npub16p8v7varqwjes5hak6q7mz6pygqm4pwc6gve4mrned3xs8tz42gq7kfhdw/satshoot"],
+                ["r", "wss://relay.primal.net"],
+                ["merge-commit", "c318b8577faef1bc57671b61524af476e86ac800"],
+                ["applied-as-commits",
+                    "c318b8577faef1bc57671b61524af476e86ac800",
+                    "e30a0c2fe8a7093f4513bf45e2e5e1f1ee521baa",
+                    "25cfef28e773f9fd805bf97c33083fb76801fc40"]
+            ],
+            "content": "PR applied: Cashu Payments with Locktime and Refund Public Key"
+        })
+    }
+
+    // ── extract_head_branch ────────────────────────────────────────────────
+
+    #[test]
+    fn head_branch_simple() {
+        let branch = extract_head_branch(&event_30618_vidstr());
+        eprintln!("head_branch_simple => {branch:?}");
+        assert_eq!(branch, Some("main".to_string()));
+    }
+
+    #[test]
+    fn head_branch_missing_returns_none() {
+        // amethyst fixture has no HEAD tag
+        let branch = extract_head_branch(&event_30618_amethyst());
+        eprintln!("head_branch_missing_returns_none => {branch:?}");
+        assert_eq!(branch, None);
+    }
+
+    #[test]
+    fn head_branch_on_empty_refs_event() {
+        let branch = extract_head_branch(&event_30618_empty_refs());
+        eprintln!("head_branch_on_empty_refs_event => {branch:?}");
+        assert_eq!(branch, None);
+    }
+
+    // ── extract_refs ──────────────────────────────────────────────────────
+
+    #[test]
+    fn refs_single_branch() {
+        let refs = extract_refs(&event_30618_vidstr());
+        eprintln!("refs_single_branch => {refs:?}");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(
+            refs.get("refs/heads/main").map(|s| s.as_str()),
+            Some("4f6724601d66ea5b5502bf9de8e3ee4dbce03b45")
+        );
+    }
+
+    #[test]
+    fn refs_amethyst_multiple_branches_and_tags() {
+        let refs = extract_refs(&event_30618_amethyst());
+        eprintln!("refs_amethyst_multiple => {} refs", refs.len());
+        // 3 tags + 4 branches = 7
+        assert_eq!(refs.len(), 7);
+        assert!(refs.contains_key("refs/heads/main"));
+        assert!(refs.contains_key("refs/heads/recommendation-engine"));
+        assert!(refs.contains_key("refs/heads/full-outbox"));
+        assert!(refs.contains_key("refs/tags/v0.11.0"));
+    }
+
+    #[test]
+    fn refs_empty_event_returns_empty_map() {
+        let refs = extract_refs(&event_30618_empty_refs());
+        eprintln!("refs_empty_event_returns_empty_map => {refs:?}");
+        assert!(refs.is_empty());
+    }
+
+    // ── extract_repo_addr ─────────────────────────────────────────────────
+
+    #[test]
+    fn repo_addr_standard_format() {
+        let addr = extract_repo_addr(&event_1617_patch());
+        eprintln!("repo_addr_standard_format => {addr:?}");
+        assert_eq!(
+            addr,
+            Some((
+                "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d".to_string(),
+                "nprogram".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn repo_addr_from_pr() {
+        let addr = extract_repo_addr(&event_1618_pr());
+        eprintln!("repo_addr_from_pr => {addr:?}");
+        assert_eq!(
+            addr,
+            Some((
+                "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90".to_string(),
+                "satshoot".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn repo_addr_from_issue() {
+        let addr = extract_repo_addr(&event_1621_issue());
+        eprintln!("repo_addr_from_issue => {addr:?}");
+        assert_eq!(
+            addr,
+            Some((
+                "02719482b1c8e95a6dcc468af2c7bfdb6c0855dbc1ba6920bd6bc6201e350012".to_string(),
+                "oba".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn repo_addr_npub_slash_format_in_status() {
+        // kind:1631 uses "npub.../satshoot" format in the a tag
+        let addr = extract_repo_addr(&event_1631_applied());
+        eprintln!("repo_addr_npub_slash_format => {addr:?}");
+        let (pubkey, repo) = addr.expect("should parse npub/repo format");
+        assert_eq!(repo, "satshoot");
+        assert_eq!(pubkey.len(), 64);
+        assert!(pubkey.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn repo_addr_missing_returns_none() {
+        // 30618 events have no a tag
+        let addr = extract_repo_addr(&event_30618_vidstr());
+        eprintln!("repo_addr_missing_returns_none => {addr:?}");
+        assert_eq!(addr, None);
+    }
+
+    // ── extract_subject ───────────────────────────────────────────────────
+
+    #[test]
+    fn subject_from_pr() {
+        let subj = extract_subject(&event_1618_pr());
+        eprintln!("subject_from_pr => {subj:?}");
+        assert_eq!(
+            subj,
+            Some("Cashu Payments with Locktime and Refund Public Key".to_string())
+        );
+    }
+
+    #[test]
+    fn subject_from_issue() {
+        let subj = extract_subject(&event_1621_issue());
+        eprintln!("subject_from_issue => {subj:?}");
+        assert!(subj.unwrap().starts_with("Hi nsec1"));
+    }
+
+    #[test]
+    fn subject_missing_returns_none() {
+        let subj = extract_subject(&event_1617_patch());
+        eprintln!("subject_missing_returns_none => {subj:?}");
+        assert_eq!(subj, None);
+    }
+
+    // ── extract_tip_commit ────────────────────────────────────────────────
+
+    #[test]
+    fn tip_commit_from_pr_c_tag() {
+        let sha = extract_tip_commit(&event_1618_pr());
+        eprintln!("tip_commit_from_pr_c_tag => {sha:?}");
+        assert_eq!(sha, Some("c318b8577faef1bc57671b61524af476e86ac800".to_string()));
+    }
+
+    #[test]
+    fn tip_commit_from_applied_merge_commit() {
+        let sha = extract_tip_commit(&event_1631_applied());
+        eprintln!("tip_commit_from_applied_merge_commit => {sha:?}");
+        assert_eq!(sha, Some("c318b8577faef1bc57671b61524af476e86ac800".to_string()));
+    }
+
+    #[test]
+    fn tip_commit_from_patch_r_tag() {
+        let sha = extract_tip_commit(&event_1617_patch());
+        eprintln!("tip_commit_from_patch_r_tag => {sha:?}");
+        assert_eq!(sha, Some("fb30ddf36678dd287b47fe979838672fa4a740f3".to_string()));
+    }
+
+    #[test]
+    fn tip_commit_missing_returns_none() {
+        // Status open event has no commit tag
+        let sha = extract_tip_commit(&event_1630_open());
+        eprintln!("tip_commit_missing_returns_none => {sha:?}");
+        assert_eq!(sha, None);
+    }
+
+    // ── status_kind_str ───────────────────────────────────────────────────
+
+    #[test]
+    fn status_kind_str_all_values() {
+        for (k, expected) in [(1630u64, "open"), (1631, "applied"), (1632, "closed"), (1633, "draft"), (9999, "unknown")] {
+            let s = status_kind_str(k);
+            eprintln!("status_kind_str({k}) => {s}");
+            assert_eq!(s, expected);
+        }
+    }
+
+    // ── extract_labels ────────────────────────────────────────────────────
+
+    #[test]
+    fn labels_from_issue() {
+        let labels = extract_labels(&event_1621_issue());
+        eprintln!("labels_from_issue => {labels:?}");
+        assert_eq!(labels, vec!["bug", "security"]);
+    }
+
+    #[test]
+    fn labels_from_pr_single() {
+        let labels = extract_labels(&event_1618_pr());
+        eprintln!("labels_from_pr_single => {labels:?}");
+        assert_eq!(labels, vec!["enhancement"]);
+    }
+
+    #[test]
+    fn labels_missing_returns_empty() {
+        let labels = extract_labels(&event_1617_patch());
+        eprintln!("labels_missing_returns_empty (patch has t:root) => {labels:?}");
+        // patch has t:root which is a valid label too
+        assert!(labels.contains(&"root".to_string()));
     }
 }

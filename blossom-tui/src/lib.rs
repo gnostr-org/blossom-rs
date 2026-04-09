@@ -32,8 +32,8 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 pub const APP_TITLE: &str = "blossom-tui";
 pub const TAB_NAMES: &[&str] = &[
-    " Blobs ", " Upload ", " Batch ", " Admin ", " Relay ", " NIP-96 ", " NIP-34 ", " Status ",
-    " Keygen ", " Profile ",
+    " Blobs ", " Upload ", " Batch ", " Admin ", " Relay ", " NIP-65 ", " NIP-96 ",
+    " NIP-34 ", " Status ", " Keygen ", " Profile ",
 ];
 
 pub const COLOR_ACCENT: Color = Color::Cyan;
@@ -486,10 +486,20 @@ pub struct App {
     pub admin_users_loading: bool,
     pub admin_users_error: Option<String>,
 
-    // Relay tab
+    // Relay tab (blossom relay admin)
     pub relay_policy: Option<serde_json::Value>,
     pub relay_policy_loading: bool,
     pub relay_policy_error: Option<String>,
+
+    // NIP-65 relay list (kind:10002)
+    pub nip65_relays: Vec<(String, String)>, // (url, marker: read|write|"")
+    pub nip65_selected: usize,
+    pub nip65_input: String,        // URL being typed
+    pub nip65_input_mode: bool,     // editing new relay URL
+    pub nip65_marker: String,       // "read", "write", or ""
+    pub nip65_marker_idx: usize,    // 0=both,1=read,2=write
+    pub nip65_nostr_relay: String,  // relay to publish to
+    pub nip65_relay_edit: bool,
 
     // NIP-96 tab
     pub nip96_info: Option<serde_json::Value>,
@@ -599,6 +609,14 @@ impl App {
             relay_policy: None,
             relay_policy_loading: false,
             relay_policy_error: None,
+            nip65_relays: Vec::new(),
+            nip65_selected: 0,
+            nip65_input: String::new(),
+            nip65_input_mode: false,
+            nip65_marker: String::new(),
+            nip65_marker_idx: 0,
+            nip65_nostr_relay: String::new(),
+            nip65_relay_edit: false,
             nip96_info: None,
             nip96_info_loading: false,
             nip96_info_error: None,
@@ -1912,11 +1930,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         2 => draw_batch_tab(f, app, chunks[2]),
         3 => draw_admin_tab(f, app, chunks[2]),
         4 => draw_relay_tab(f, app, chunks[2]),
-        5 => draw_nip96_tab(f, app, chunks[2]),
-        6 => draw_nip34_tab(f, app, chunks[2]),
-        7 => draw_status_tab(f, app, chunks[2]),
-        8 => draw_keygen_tab(f, app, chunks[2]),
-        9 => draw_profile_tab(f, app, chunks[2]),
+        5 => draw_nip65_tab(f, app, chunks[2]),
+        6 => draw_nip96_tab(f, app, chunks[2]),
+        7 => draw_nip34_tab(f, app, chunks[2]),
+        8 => draw_status_tab(f, app, chunks[2]),
+        9 => draw_keygen_tab(f, app, chunks[2]),
+        10 => draw_profile_tab(f, app, chunks[2]),
         _ => {}
     }
 
@@ -2951,6 +2970,122 @@ pub fn draw_relay_tab(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+pub fn draw_nip65_tab(f: &mut Frame, app: &App, area: Rect) {
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // relay bar
+            Constraint::Min(0),    // list
+            Constraint::Length(3), // input
+            Constraint::Length(2), // hints
+        ])
+        .split(area);
+
+    // ── Publish relay bar ─────────────────────────────────────────────────────
+    let relay_display = if app.nip65_nostr_relay.is_empty() {
+        "<none — press 'R' to set>".to_string()
+    } else {
+        app.nip65_nostr_relay.clone()
+    };
+    let relay_style = if app.nip65_relay_edit {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(COLOR_DIM)
+    };
+    f.render_widget(
+        Paragraph::new(format!(
+            "{}: {relay_display}",
+            if app.nip65_relay_edit { "Relay [editing]" } else { "Publish to relay" }
+        ))
+        .style(relay_style)
+        .block(Block::default().borders(Borders::ALL).title(
+            " Nostr Relay (for publishing kind:10002) ",
+        )),
+        outer[0],
+    );
+
+    // ── Relay list ────────────────────────────────────────────────────────────
+    let items: Vec<ListItem> = app
+        .nip65_relays
+        .iter()
+        .enumerate()
+        .map(|(i, (url, marker))| {
+            let marker_label = if marker.is_empty() {
+                " [both] "
+            } else if marker == "read" {
+                " [read] "
+            } else {
+                "[write] "
+            };
+            let style = if i == app.nip65_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(COLOR_SELECTED_BG)
+            } else {
+                Style::default()
+            };
+            let marker_color = match marker.as_str() {
+                "read"  => Color::Green,
+                "write" => Color::Yellow,
+                _       => Color::Cyan,
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker_label, Style::default().fg(marker_color)),
+                Span::styled(url.clone(), style),
+            ]))
+        })
+        .collect();
+
+    let list_title = format!(
+        " NIP-65 Relay List — {} relays ",
+        app.nip65_relays.len()
+    );
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(list_title)
+                .border_style(Style::default().fg(COLOR_ACCENT)),
+        );
+    f.render_widget(list, outer[1]);
+
+    // ── Input bar ─────────────────────────────────────────────────────────────
+    let input_text = if app.nip65_input_mode {
+        format!("Add relay: {}█", app.nip65_input)
+    } else {
+        let marker_str = match app.nip65_marker_idx {
+            0 => "both",
+            1 => "read",
+            _ => "write",
+        };
+        format!("New relay marker: [{marker_str}]  (press 'a' to add)")
+    };
+    let input_style = if app.nip65_input_mode {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(COLOR_DIM)
+    };
+    f.render_widget(
+        Paragraph::new(input_text)
+            .style(input_style)
+            .block(Block::default().borders(Borders::ALL)),
+        outer[2],
+    );
+
+    // ── Hints ─────────────────────────────────────────────────────────────────
+    let hints = if app.nip65_input_mode {
+        "Enter: confirm add   Esc: cancel"
+    } else if app.nip65_relay_edit {
+        "Enter/Esc: done   Type publish-relay URL"
+    } else {
+        "a:add  d:delete  m:cycle-marker  R:relay  P:publish  ↑↓:move"
+    };
+    f.render_widget(
+        Paragraph::new(hints).style(Style::default().fg(COLOR_DIM)),
+        outer[3],
+    );
+}
+
 pub fn draw_nip96_tab(f: &mut Frame, app: &App, area: Rect) {
     // Split into top (server info) and bottom (file list)
     let chunks = Layout::default()
@@ -3361,11 +3496,12 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             2 => " i:edit  Enter:add/start  x:remove-last  Tab:next  ?:help  q:quit",
             3 => " r:refresh  Tab:next  ?:help  q:quit",
             4 => " r:refresh  Tab:next  ?:help  q:quit",
-            5 => " r:refresh  Tab:next  ?:help  q:quit",
-            6 => " r:edit-relay  c:connect  ↑↓:scroll  Tab:next  ?:help  q:quit",
-            7 => " r:refresh  Tab:next  ?:help  q:quit",
-            8 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey-hex  4:copy-npub  Tab:next  ?:help  q:quit",
-            9 => " 1-6:select  e:edit  r:relay  P:publish-kind0  Tab:next  ?:help  q:quit",
+            5 => " a:add  d:delete  m:marker  R:relay  P:publish  Tab:next  ?:help  q:quit",
+            6 => " r:refresh  Tab:next  ?:help  q:quit",
+            7 => " r:edit-relay  c:connect  ↑↓:scroll  Tab:next  ?:help  q:quit",
+            8 => " r:refresh  Tab:next  ?:help  q:quit",
+            9 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey-hex  4:copy-npub  Tab:next  ?:help  q:quit",
+            10 => " 1-6:select  e:edit  r:relay  P:publish-kind0  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -3690,8 +3826,20 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
             " Relay ",
             vec![kv("  r                ", "Refresh relay policy")],
         ),
-        // NIP-96
+        // NIP-65
         5 => (
+            " NIP-65 Relay List ",
+            vec![
+                kv("  a                ", "Add new relay URL"),
+                kv("  d / Delete       ", "Remove selected relay"),
+                kv("  m                ", "Cycle marker (both/read/write)"),
+                kv("  R                ", "Set publish relay URL"),
+                kv("  P                ", "Publish kind:10002 relay list"),
+                kv("  ↑ / ↓            ", "Move selection"),
+            ],
+        ),
+        // NIP-96
+        6 => (
             " NIP-96 ",
             vec![kv(
                 "  r                ",
@@ -3699,7 +3847,7 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
             )],
         ),
         // NIP-34
-        6 => (
+        7 => (
             " NIP-34 ",
             vec![
                 kv("  r                ", "Edit relay URL"),
@@ -3709,12 +3857,12 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
             ],
         ),
         // Status
-        7 => (
+        8 => (
             " Status ",
             vec![kv("  r                ", "Refresh server status")],
         ),
         // Keygen
-        8 => (
+        9 => (
             " Keygen ",
             vec![
                 kv("  g                ", "Generate new BIP-340 keypair"),
@@ -3724,7 +3872,7 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  4                ", "Copy npub (NIP-19 bech32) to clipboard"),
             ],
         ),
-        9 => (
+        10 => (
             " Profile (NIP-01) ",
             vec![
                 kv("  1-6              ", "Select field to edit"),
@@ -4192,7 +4340,139 @@ pub async fn run_loop(
                             app.refresh_status();
                         }
                     }
-                    8 => match key.code {
+                    5 => {
+                        // NIP-65 Relay List tab
+                        if app.nip65_relay_edit {
+                            match key.code {
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    app.nip65_relay_edit = false;
+                                }
+                                KeyCode::Char(c) => {
+                                    app.nip65_nostr_relay.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.nip65_nostr_relay.pop();
+                                }
+                                _ => {}
+                            }
+                        } else if app.nip65_input_mode {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    let url =
+                                        app.nip65_input.trim().to_string();
+                                    if !url.is_empty() {
+                                        let marker =
+                                            app.nip65_marker.clone();
+                                        app.nip65_relays
+                                            .push((url, marker));
+                                    }
+                                    app.nip65_input.clear();
+                                    app.nip65_input_mode = false;
+                                }
+                                KeyCode::Esc => {
+                                    app.nip65_input.clear();
+                                    app.nip65_input_mode = false;
+                                }
+                                KeyCode::Char(c) => {
+                                    app.nip65_input.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.nip65_input.pop();
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Char('a') => {
+                                    app.nip65_input_mode = true;
+                                    app.nip65_input.clear();
+                                }
+                                KeyCode::Char('d') | KeyCode::Delete => {
+                                    let sel = app.nip65_selected;
+                                    if sel < app.nip65_relays.len() {
+                                        app.nip65_relays.remove(sel);
+                                        if app.nip65_selected
+                                            >= app.nip65_relays.len()
+                                            && !app.nip65_relays.is_empty()
+                                        {
+                                            app.nip65_selected =
+                                                app.nip65_relays.len() - 1;
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('m') => {
+                                    app.nip65_marker_idx =
+                                        (app.nip65_marker_idx + 1) % 3;
+                                    app.nip65_marker = match app
+                                        .nip65_marker_idx
+                                    {
+                                        0 => "".into(),
+                                        1 => "read".into(),
+                                        _ => "write".into(),
+                                    };
+                                    // update selected relay marker
+                                    let sel = app.nip65_selected;
+                                    if let Some(r) =
+                                        app.nip65_relays.get_mut(sel)
+                                    {
+                                        r.1 = app.nip65_marker.clone();
+                                    }
+                                }
+                                KeyCode::Char('R') => {
+                                    app.nip65_relay_edit = true;
+                                }
+                                KeyCode::Char('P') => {
+                                    if let Some(sk) = &app.secret_key {
+                                        let relays =
+                                            app.nip65_relays.clone();
+                                        match crate::nostr_sign::kind10002_relay_list(sk, &relays) {
+                                            Ok(ev) => {
+                                                app.notification = Some((
+                                                    format!(
+                                                        "Relay list event: {}…",
+                                                        &ev["id"]
+                                                            .as_str()
+                                                            .unwrap_or("")[..8]
+                                                    ),
+                                                    false,
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                app.notification = Some((
+                                                    format!(
+                                                        "Sign error: {e}"
+                                                    ),
+                                                    true,
+                                                ));
+                                            }
+                                        }
+                                    } else {
+                                        app.notification = Some((
+                                            "No key — go to Keygen first"
+                                                .into(),
+                                            true,
+                                        ));
+                                    }
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.nip65_selected =
+                                        app.nip65_selected.saturating_sub(1);
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    if !app.nip65_relays.is_empty() {
+                                        app.nip65_selected = (app
+                                            .nip65_selected
+                                            + 1)
+                                        .min(
+                                            app.nip65_relays.len() - 1,
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    9 => match key.code {
                         KeyCode::Char('g') => app.generate_keypair(),
                         KeyCode::Char('1') => app.copy_keygen_field(1),
                         KeyCode::Char('2') => app.copy_keygen_field(2),
@@ -4200,7 +4480,7 @@ pub async fn run_loop(
                         KeyCode::Char('4') => app.copy_keygen_field(4),
                         _ => {}
                     },
-                    9 => {
+                    10 => {
                         // Profile tab
                         if app.profile_relay_edit {
                             match key.code {

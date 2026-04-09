@@ -33,7 +33,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 pub const APP_TITLE: &str = "blossom-tui";
 pub const TAB_NAMES: &[&str] = &[
     " Blobs ", " Upload ", " Batch ", " Admin ", " Relay ", " NIP-65 ", " NIP-96 ",
-    " NIP-34 ", " Status ", " Keygen ", " Profile ",
+    " NIP-34 ", " NIP-B7 ", " Status ", " Keygen ", " Profile ",
 ];
 
 pub const COLOR_ACCENT: Color = Color::Cyan;
@@ -501,6 +501,14 @@ pub struct App {
     pub nip65_nostr_relay: String,  // relay to publish to
     pub nip65_relay_edit: bool,
 
+    // NIP-B7 tab (Blossom Server List kind:10063)
+    pub nipb7_servers: Vec<String>, // server URLs
+    pub nipb7_selected: usize,
+    pub nipb7_input: String,
+    pub nipb7_input_mode: bool,
+    pub nipb7_nostr_relay: String,
+    pub nipb7_relay_edit: bool,
+
     // NIP-96 tab
     pub nip96_info: Option<serde_json::Value>,
     pub nip96_info_loading: bool,
@@ -617,6 +625,12 @@ impl App {
             nip65_marker_idx: 0,
             nip65_nostr_relay: String::new(),
             nip65_relay_edit: false,
+            nipb7_servers: Vec::new(),
+            nipb7_selected: 0,
+            nipb7_input: String::new(),
+            nipb7_input_mode: false,
+            nipb7_nostr_relay: String::new(),
+            nipb7_relay_edit: false,
             nip96_info: None,
             nip96_info_loading: false,
             nip96_info_error: None,
@@ -1933,9 +1947,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         5 => draw_nip65_tab(f, app, chunks[2]),
         6 => draw_nip96_tab(f, app, chunks[2]),
         7 => draw_nip34_tab(f, app, chunks[2]),
-        8 => draw_status_tab(f, app, chunks[2]),
-        9 => draw_keygen_tab(f, app, chunks[2]),
-        10 => draw_profile_tab(f, app, chunks[2]),
+        8 => draw_nipb7_tab(f, app, chunks[2]),
+        9 => draw_status_tab(f, app, chunks[2]),
+        10 => draw_keygen_tab(f, app, chunks[2]),
+        11 => draw_profile_tab(f, app, chunks[2]),
         _ => {}
     }
 
@@ -3086,6 +3101,99 @@ pub fn draw_nip65_tab(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+pub fn draw_nipb7_tab(f: &mut Frame, app: &App, area: Rect) {
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // relay bar
+            Constraint::Min(0),    // list
+            Constraint::Length(3), // input
+            Constraint::Length(2), // hints
+        ])
+        .split(area);
+
+    // ── Publish relay bar ─────────────────────────────────────────────────────
+    let relay_display = if app.nipb7_nostr_relay.is_empty() {
+        "<none — press 'R' to set>".to_string()
+    } else {
+        app.nipb7_nostr_relay.clone()
+    };
+    f.render_widget(
+        Paragraph::new(format!(
+            "{}: {relay_display}",
+            if app.nipb7_relay_edit { "Relay [editing]" } else { "Publish to" }
+        ))
+        .style(if app.nipb7_relay_edit {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(COLOR_DIM)
+        })
+        .block(Block::default().borders(Borders::ALL).title(
+            " Nostr Relay (for publishing kind:10063) ",
+        )),
+        outer[0],
+    );
+
+    // ── Server list ───────────────────────────────────────────────────────────
+    let items: Vec<ListItem> = app
+        .nipb7_servers
+        .iter()
+        .enumerate()
+        .map(|(i, url)| {
+            let style = if i == app.nipb7_selected {
+                Style::default().fg(Color::Black).bg(COLOR_SELECTED_BG)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(" 🌸 ", Style::default().fg(Color::Magenta)),
+                Span::styled(url.clone(), style),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(
+                " NIP-B7 Blossom Server List — {} servers ",
+                app.nipb7_servers.len()
+            ))
+            .border_style(Style::default().fg(COLOR_ACCENT)),
+    );
+    f.render_widget(list, outer[1]);
+
+    // ── Input bar ─────────────────────────────────────────────────────────────
+    let input_text = if app.nipb7_input_mode {
+        format!("Add server: {}█", app.nipb7_input)
+    } else {
+        "(press 'a' to add a Blossom server URL)".to_string()
+    };
+    f.render_widget(
+        Paragraph::new(input_text)
+            .style(if app.nipb7_input_mode {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(COLOR_DIM)
+            })
+            .block(Block::default().borders(Borders::ALL)),
+        outer[2],
+    );
+
+    // ── Hints ─────────────────────────────────────────────────────────────────
+    let hints = if app.nipb7_input_mode {
+        "Enter: confirm add   Esc: cancel"
+    } else if app.nipb7_relay_edit {
+        "Enter/Esc: done   Type Nostr relay URL"
+    } else {
+        "a:add  d:delete  R:relay  P:publish kind:10063  ↑↓:move"
+    };
+    f.render_widget(
+        Paragraph::new(hints).style(Style::default().fg(COLOR_DIM)),
+        outer[3],
+    );
+}
+
 pub fn draw_nip96_tab(f: &mut Frame, app: &App, area: Rect) {
     // Split into top (server info) and bottom (file list)
     let chunks = Layout::default()
@@ -3499,9 +3607,10 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             5 => " a:add  d:delete  m:marker  R:relay  P:publish  Tab:next  ?:help  q:quit",
             6 => " r:refresh  Tab:next  ?:help  q:quit",
             7 => " r:edit-relay  c:connect  ↑↓:scroll  Tab:next  ?:help  q:quit",
-            8 => " r:refresh  Tab:next  ?:help  q:quit",
-            9 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey-hex  4:copy-npub  Tab:next  ?:help  q:quit",
-            10 => " 1-6:select  e:edit  r:relay  P:publish-kind0  Tab:next  ?:help  q:quit",
+            8 => " a:add  d:delete  R:relay  P:publish  Tab:next  ?:help  q:quit",
+            9 => " r:refresh  Tab:next  ?:help  q:quit",
+            10 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey-hex  4:copy-npub  Tab:next  ?:help  q:quit",
+            11 => " 1-6:select  e:edit  r:relay  P:publish-kind0  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -3856,13 +3965,24 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  ↓ / j            ", "Scroll event list down"),
             ],
         ),
-        // Status
+        // NIP-B7 Blossom Server List
         8 => (
+            " NIP-B7 Server List ",
+            vec![
+                kv("  a                ", "Add server URL"),
+                kv("  d / Delete       ", "Remove selected server"),
+                kv("  R                ", "Set publish relay URL"),
+                kv("  P                ", "Publish kind:10063 server list"),
+                kv("  ↑ / ↓            ", "Move selection"),
+            ],
+        ),
+        // Status
+        9 => (
             " Status ",
             vec![kv("  r                ", "Refresh server status")],
         ),
         // Keygen
-        9 => (
+        10 => (
             " Keygen ",
             vec![
                 kv("  g                ", "Generate new BIP-340 keypair"),
@@ -3872,7 +3992,7 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  4                ", "Copy npub (NIP-19 bech32) to clipboard"),
             ],
         ),
-        10 => (
+        11 => (
             " Profile (NIP-01) ",
             vec![
                 kv("  1-6              ", "Select field to edit"),
@@ -4472,7 +4592,115 @@ pub async fn run_loop(
                             }
                         }
                     }
-                    9 => match key.code {
+                    8 => {
+                        // NIP-B7 Blossom Server List tab
+                        if app.nipb7_relay_edit {
+                            match key.code {
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    app.nipb7_relay_edit = false;
+                                }
+                                KeyCode::Char(c) => {
+                                    app.nipb7_nostr_relay.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.nipb7_nostr_relay.pop();
+                                }
+                                _ => {}
+                            }
+                        } else if app.nipb7_input_mode {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    let url =
+                                        app.nipb7_input.trim().to_string();
+                                    if !url.is_empty() {
+                                        app.nipb7_servers.push(url);
+                                    }
+                                    app.nipb7_input.clear();
+                                    app.nipb7_input_mode = false;
+                                }
+                                KeyCode::Esc => {
+                                    app.nipb7_input.clear();
+                                    app.nipb7_input_mode = false;
+                                }
+                                KeyCode::Char(c) => {
+                                    app.nipb7_input.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.nipb7_input.pop();
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Char('a') => {
+                                    app.nipb7_input_mode = true;
+                                    app.nipb7_input.clear();
+                                }
+                                KeyCode::Char('d') | KeyCode::Delete => {
+                                    let sel = app.nipb7_selected;
+                                    if sel < app.nipb7_servers.len() {
+                                        app.nipb7_servers.remove(sel);
+                                        if app.nipb7_selected
+                                            >= app.nipb7_servers.len()
+                                            && !app.nipb7_servers.is_empty()
+                                        {
+                                            app.nipb7_selected =
+                                                app.nipb7_servers.len() - 1;
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('R') => {
+                                    app.nipb7_relay_edit = true;
+                                }
+                                KeyCode::Char('P') => {
+                                    if let Some(sk) = &app.secret_key {
+                                        let servers =
+                                            app.nipb7_servers.clone();
+                                        match crate::nostr_sign::kind10063_server_list(sk, &servers) {
+                                            Ok(ev) => {
+                                                app.notification = Some((
+                                                    format!(
+                                                        "Server list event: {}…",
+                                                        &ev["id"]
+                                                            .as_str()
+                                                            .unwrap_or("")[..8]
+                                                    ),
+                                                    false,
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                app.notification = Some((
+                                                    format!("Sign error: {e}"),
+                                                    true,
+                                                ));
+                                            }
+                                        }
+                                    } else {
+                                        app.notification = Some((
+                                            "No key — go to Keygen first".into(),
+                                            true,
+                                        ));
+                                    }
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.nipb7_selected =
+                                        app.nipb7_selected.saturating_sub(1);
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    if !app.nipb7_servers.is_empty() {
+                                        app.nipb7_selected = (app
+                                            .nipb7_selected
+                                            + 1)
+                                        .min(
+                                            app.nipb7_servers.len() - 1,
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    10 => match key.code {
                         KeyCode::Char('g') => app.generate_keypair(),
                         KeyCode::Char('1') => app.copy_keygen_field(1),
                         KeyCode::Char('2') => app.copy_keygen_field(2),
@@ -4480,7 +4708,7 @@ pub async fn run_loop(
                         KeyCode::Char('4') => app.copy_keygen_field(4),
                         _ => {}
                     },
-                    10 => {
+                    11 => {
                         // Profile tab
                         if app.profile_relay_edit {
                             match key.code {

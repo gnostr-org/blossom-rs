@@ -209,6 +209,7 @@ pub struct App {
 
     // Keygen tab
     pub keygen_data: Option<KeygenResult>,
+    pub keygen_copied: Option<u8>, // 1=hex secret, 2=nsec, 3=pubkey
 
     // Batch upload tab
     pub batch_items: Vec<BatchItem>,
@@ -292,6 +293,7 @@ impl App {
             status_loading: false,
             status_error: None,
             keygen_data: None,
+            keygen_copied: None,
             batch_items: Vec::new(),
             batch_input: String::new(),
             batch_input_mode: false,
@@ -681,6 +683,7 @@ impl App {
             nsec,
             pubkey,
         });
+        self.keygen_copied = None;
     }
 
     pub fn next_tab(&mut self) {
@@ -746,6 +749,99 @@ impl App {
         self.filter_str.clear();
         self.filter_mode = false;
         self.blobs_table.select(Some(0));
+    }
+
+    /// Copy the full SHA-256 of the selected blob to the system clipboard.
+    pub fn copy_selected_sha256(&mut self) {
+        let Some(idx) = self.blobs_table.selected() else {
+            return;
+        };
+        let visible = self.visible_blobs();
+        let Some(blob) = visible.get(idx) else {
+            return;
+        };
+        let sha = blob.sha256.clone();
+        drop(visible);
+        match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(sha.clone())) {
+            Ok(()) => self.notification = Some((format!("Copied SHA256: {sha}"), false)),
+            Err(e) => self.notification = Some((format!("Clipboard error: {e}"), true)),
+        }
+    }
+
+    /// Copy the URL of the selected blob to the system clipboard.
+    pub fn copy_selected_url(&mut self) {
+        let Some(idx) = self.blobs_table.selected() else {
+            return;
+        };
+        let visible = self.visible_blobs();
+        let Some(blob) = visible.get(idx) else {
+            return;
+        };
+        let url = match &blob.url {
+            Some(u) => u.clone(),
+            None => {
+                self.notification = Some(("Selected blob has no URL.".into(), true));
+                return;
+            }
+        };
+        drop(visible);
+        match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(url.clone())) {
+            Ok(()) => self.notification = Some((format!("Copied URL: {url}"), false)),
+            Err(e) => self.notification = Some((format!("Clipboard error: {e}"), true)),
+        }
+    }
+
+    /// Copy a keygen field to the clipboard. `field`: 1=hex secret, 2=nsec, 3=pubkey.
+    pub fn copy_keygen_field(&mut self, field: u8) {
+        let Some(kp) = &self.keygen_data else {
+            self.notification = Some(("Press g to generate a keypair first.".into(), true));
+            return;
+        };
+        let (label, value) = match field {
+            1 => ("Secret (hex)", kp.hex_secret.clone()),
+            2 => ("nsec", kp.nsec.clone()),
+            3 => ("Public key", kp.pubkey.clone()),
+            _ => return,
+        };
+        match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(value.clone())) {
+            Ok(()) => {
+                self.keygen_copied = Some(field);
+                self.notification = Some((format!("Copied {label}: {value}"), false))
+            }
+            Err(e) => self.notification = Some((format!("Clipboard error: {e}"), true)),
+        }
+    }
+
+    /// Return the visible (filtered + sorted) blob list, mirroring draw_blobs_tab logic.
+    fn visible_blobs(&self) -> Vec<&BlobDescriptor> {
+        let filter_lc = self.filter_str.to_lowercase();
+        let mut visible: Vec<&BlobDescriptor> = self
+            .blobs
+            .iter()
+            .filter(|b| {
+                if filter_lc.is_empty() {
+                    return true;
+                }
+                b.sha256.to_lowercase().contains(&filter_lc)
+                    || b.content_type
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&filter_lc)
+            })
+            .collect();
+        match self.sort_field {
+            SortField::Date => visible.sort_by_key(|b| std::cmp::Reverse(b.uploaded.unwrap_or(0))),
+            SortField::Size => visible.sort_by_key(|b| std::cmp::Reverse(b.size)),
+            SortField::Hash => visible.sort_by(|a, b| a.sha256.cmp(&b.sha256)),
+            SortField::ContentType => visible.sort_by(|a, b| {
+                a.content_type
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(b.content_type.as_deref().unwrap_or(""))
+            }),
+        }
+        visible
     }
 
     /// Open the download path prompt for the selected blob.
@@ -1226,7 +1322,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_status_bar(f, app, chunks[3]);
 
     if app.show_help {
-        draw_help_popup(f, area);
+        draw_help_popup(f, area, app.tab);
     }
 
     if app.modal.is_some() {
@@ -2140,6 +2236,7 @@ pub fn draw_keygen_tab(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(2), // secret hex
             Constraint::Length(2), // nsec
             Constraint::Length(2), // pubkey
+            Constraint::Length(2), // copy hints
             Constraint::Min(0),    // warning / padding
         ])
         .split(inner);
@@ -2160,34 +2257,53 @@ pub fn draw_keygen_tab(f: &mut Frame, app: &App, area: Rect) {
             .fg(COLOR_ACCENT)
             .add_modifier(Modifier::BOLD);
         let val = Style::default().fg(Color::White);
+        let key_hint = Style::default().fg(COLOR_DIM);
+        let copied_style = Style::default().fg(COLOR_OK).add_modifier(Modifier::BOLD);
+        let copied_badge = |field: u8| -> Span<'static> {
+            if app.keygen_copied == Some(field) {
+                Span::styled(" ✓ in clipboard", copied_style)
+            } else {
+                Span::raw("")
+            }
+        };
 
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Secret (hex):  ", label),
-                Span::styled(&kp.hex_secret, val),
+                Span::styled("[1] Secret (hex):  ", label),
+                Span::styled(kp.hex_secret.clone(), val),
+                copied_badge(1),
             ])),
             chunks[1],
         );
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Secret (nsec): ", label),
-                Span::styled(&kp.nsec, val),
+                Span::styled("[2] Secret (nsec): ", label),
+                Span::styled(kp.nsec.clone(), val),
+                copied_badge(2),
             ])),
             chunks[2],
         );
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Public key:    ", label),
-                Span::styled(&kp.pubkey, val),
+                Span::styled("[3] Public key:    ", label),
+                Span::styled(kp.pubkey.clone(), val),
+                copied_badge(3),
             ])),
             chunks[3],
+        );
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "    Press 1 / 2 / 3 to copy the corresponding value to the clipboard.",
+                key_hint,
+            )),
+            chunks[4],
         );
         f.render_widget(
             Paragraph::new(Span::styled(
                 "⚠  Keep the secret key safe — it is not stored anywhere.",
                 Style::default().fg(Color::Yellow),
             )),
-            chunks[4],
+            chunks[5],
         );
     }
 }
@@ -2207,7 +2323,7 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         ))
     } else {
         let hints = match app.tab {
-            0 => " r:refresh  d:delete  o:download  m:mirror  s:sort  /:filter  ↑↓/jk  Tab  ?  q",
+            0 => " r:refresh  d:delete  o:download  m:mirror  s:sort  /:filter  y:copy-sha  u:copy-url  ↑↓/jk  Tab  ?  q",
             1 => {
                 " i:edit-path  p:toggle-nip94  R:relay-url  Enter:upload  Esc:clear  Tab:next  ?:help  q:quit"
             }
@@ -2217,7 +2333,7 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             5 => " r:refresh  Tab:next  ?:help  q:quit",
             6 => " r:edit-relay  c:connect  ↑↓:scroll  Tab:next  ?:help  q:quit",
             7 => " r:refresh  Tab:next  ?:help  q:quit",
-            8 => " g:generate  Tab:next  ?:help  q:quit",
+            8 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -2294,128 +2410,142 @@ pub fn draw_modal_input(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-pub fn draw_help_popup(f: &mut Frame, area: Rect) {
+pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
+    let key = Style::default().fg(Color::Yellow);
+    let heading = Style::default()
+        .fg(COLOR_ACCENT)
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(COLOR_DIM);
+
+    // Helper closures to keep line construction concise.
+    let kv = |k: &'static str, v: &'static str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(k, key),
+            Span::styled(v, Style::default()),
+        ])
+    };
+
+    // Global bindings, always shown.
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled("  Global", heading)),
+        Line::from(""),
+        kv("  Tab / Shift+Tab  ", "Switch tabs"),
+        kv("  q / Ctrl+C       ", "Quit"),
+        kv("  ?                ", "Toggle this help"),
+    ];
+
+    // Tab-specific bindings.
+    let (tab_title, tab_lines): (&str, Vec<Line>) = match tab {
+        // Blobs
+        0 => (
+            " Blobs ",
+            vec![
+                kv("  ↑ / k            ", "Navigate up"),
+                kv("  ↓ / j            ", "Navigate down"),
+                kv("  r                ", "Refresh blob list"),
+                kv("  d                ", "Delete selected blob"),
+                kv("  o                ", "Download selected blob"),
+                kv("  m                ", "Mirror blob from URL"),
+                kv("  s                ", "Cycle sort (Date / Size / Hash / Type)"),
+                kv("  /                ", "Filter (Enter confirm, Esc clear)"),
+                kv("  y                ", "Copy SHA-256 to clipboard"),
+                kv("  u                ", "Copy URL to clipboard"),
+            ],
+        ),
+        // Upload
+        1 => (
+            " Upload ",
+            vec![
+                kv("  i                ", "Enter file-path edit mode"),
+                kv("  p                ", "Toggle NIP-94 publish"),
+                kv("  R                ", "Edit relay URL"),
+                kv("  Enter            ", "Start upload"),
+                kv("  Esc              ", "Exit edit mode / clear path"),
+            ],
+        ),
+        // Batch
+        2 => (
+            " Batch ",
+            vec![
+                kv("  i                ", "Add a file path to the queue"),
+                kv("  x                ", "Remove last queued item"),
+                kv("  Enter            ", "Start batch upload"),
+            ],
+        ),
+        // Admin
+        3 => (
+            " Admin ",
+            vec![kv("  r                ", "Refresh admin stats & user list")],
+        ),
+        // Relay
+        4 => (
+            " Relay ",
+            vec![kv("  r                ", "Refresh relay policy")],
+        ),
+        // NIP-96
+        5 => (
+            " NIP-96 ",
+            vec![kv(
+                "  r                ",
+                "Refresh NIP-96 server info + files",
+            )],
+        ),
+        // NIP-34
+        6 => (
+            " NIP-34 ",
+            vec![
+                kv("  r                ", "Edit relay URL"),
+                kv("  c                ", "Connect and subscribe"),
+                kv("  ↑ / k            ", "Scroll event list up"),
+                kv("  ↓ / j            ", "Scroll event list down"),
+            ],
+        ),
+        // Status
+        7 => (
+            " Status ",
+            vec![kv("  r                ", "Refresh server status")],
+        ),
+        // Keygen
+        8 => (
+            " Keygen ",
+            vec![
+                kv("  g                ", "Generate new BIP-340 keypair"),
+                kv("  1                ", "Copy secret key (hex) to clipboard"),
+                kv("  2                ", "Copy nsec (bech32) to clipboard"),
+                kv("  3                ", "Copy public key (hex) to clipboard"),
+            ],
+        ),
+        _ => ("", vec![]),
+    };
+
+    if !tab_lines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {tab_title}tab"),
+            heading,
+        )));
+        lines.push(Line::from(""));
+        lines.extend(tab_lines);
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press ? or Esc to close",
+        dim,
+    )));
+
+    let popup_h = (lines.len() as u16 + 2).min(area.height.saturating_sub(4));
     let popup_w = 62u16.min(area.width.saturating_sub(4));
-    let popup_h = 26u16.min(area.height.saturating_sub(4));
     let popup_x = (area.width.saturating_sub(popup_w)) / 2;
     let popup_y = (area.height.saturating_sub(popup_h)) / 2;
     let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
 
     f.render_widget(Clear, popup_area);
-
-    let y = Style::default().fg(Color::Yellow);
-    let h = Style::default()
-        .fg(COLOR_ACCENT)
-        .add_modifier(Modifier::BOLD);
-
-    let lines = vec![
-        Line::from(Span::styled("  Global", h)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Tab / Shift+Tab  ", y),
-            Span::raw("Switch tabs"),
-        ]),
-        Line::from(vec![
-            Span::styled("  q / Ctrl+C       ", y),
-            Span::raw("Quit"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?                ", y),
-            Span::raw("Toggle this help"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Blobs tab", h)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  ↑ / k            ", y),
-            Span::raw("Navigate up"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ↓ / j            ", y),
-            Span::raw("Navigate down"),
-        ]),
-        Line::from(vec![
-            Span::styled("  r                ", y),
-            Span::raw("Refresh blob list"),
-        ]),
-        Line::from(vec![
-            Span::styled("  d                ", y),
-            Span::raw("Delete selected blob"),
-        ]),
-        Line::from(vec![
-            Span::styled("  o                ", y),
-            Span::raw("Download selected blob"),
-        ]),
-        Line::from(vec![
-            Span::styled("  m                ", y),
-            Span::raw("Mirror blob from URL"),
-        ]),
-        Line::from(vec![
-            Span::styled("  s                ", y),
-            Span::raw("Cycle sort (Date/Size/Hash/Type)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  /                ", y),
-            Span::raw("Filter blobs (Enter confirm, Esc clear)"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Upload tab", h)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  i                ", y),
-            Span::raw("Enter file-path edit mode"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Enter            ", y),
-            Span::raw("Start upload"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Esc              ", y),
-            Span::raw("Exit edit mode / clear path"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  NIP-96 tab", h)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  r                ", y),
-            Span::raw("Refresh NIP-96 server info + files"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  NIP-34 tab", h)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  r                ", y),
-            Span::raw("Edit relay URL"),
-        ]),
-        Line::from(vec![
-            Span::styled("  c                ", y),
-            Span::raw("Connect and subscribe to NIP-34 events"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ↑ / ↓            ", y),
-            Span::raw("Scroll event list"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Status tab", h)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  r                ", y),
-            Span::raw("Refresh server status"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Keygen tab", h)),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  g                ", y),
-            Span::raw("Generate new keypair"),
-        ]),
-    ];
-
     let help = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Help — press ? to close ")
+                .title(format!(" Help —{tab_title}press ? to close "))
                 .border_style(Style::default().fg(COLOR_ACCENT)),
         )
         .wrap(Wrap { trim: false });
@@ -2584,6 +2714,8 @@ pub async fn run_loop(
                         KeyCode::Char('m') => app.prompt_mirror(),
                         KeyCode::Char('s') => app.cycle_sort(),
                         KeyCode::Char('/') => app.enter_filter_mode(),
+                        KeyCode::Char('y') => app.copy_selected_sha256(),
+                        KeyCode::Char('u') => app.copy_selected_url(),
                         _ => {}
                     },
                     1 => match key.code {
@@ -2639,11 +2771,13 @@ pub async fn run_loop(
                             app.refresh_status();
                         }
                     }
-                    8 => {
-                        if key.code == KeyCode::Char('g') {
-                            app.generate_keypair();
-                        }
-                    }
+                    8 => match key.code {
+                        KeyCode::Char('g') => app.generate_keypair(),
+                        KeyCode::Char('1') => app.copy_keygen_field(1),
+                        KeyCode::Char('2') => app.copy_keygen_field(2),
+                        KeyCode::Char('3') => app.copy_keygen_field(3),
+                        _ => {}
+                    },
                     _ => {}
                 }
             }

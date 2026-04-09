@@ -115,6 +115,8 @@ pub enum AppMsg {
     Nip34EventReceived(Nip34EventItem),
     Nip34Connected(String), // relay URL
     Nip34Error(String),
+    GitDone(String),
+    GitError(String),
 }
 
 // ── NIP-34 ────────────────────────────────────────────────────────────────────
@@ -218,6 +220,59 @@ pub fn detect_git_repo(dir: &std::path::Path) -> Option<GitRepoKind> {
     None
 }
 
+/// Git operations available from the file browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitAction {
+    Status,
+    Pull,
+    Push,
+    Fetch,
+    Log,
+    Diff,
+    Add,
+    Commit,
+}
+
+/// Run a git sub-command inside `repo_dir` and return combined stdout+stderr.
+async fn run_git_command(
+    repo_dir: &std::path::Path,
+    action: GitAction,
+    commit_msg: &str,
+) -> Result<String, String> {
+    let args: &[&str] = match action {
+        GitAction::Status => &["status"],
+        GitAction::Pull => &["pull"],
+        GitAction::Push => &["push"],
+        GitAction::Fetch => &["fetch", "--all"],
+        GitAction::Log => &[
+            "log", "--oneline", "--graph", "--decorate", "-20",
+        ],
+        GitAction::Diff => &["diff"],
+        GitAction::Add => &["add", "-A"],
+        GitAction::Commit => &["commit", "-m", commit_msg],
+    };
+
+    let out = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(repo_dir)
+        .output()
+        .await
+        .map_err(|e| format!("spawn git: {e}"))?;
+
+    let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(&stderr);
+    }
+    if combined.is_empty() {
+        combined = "(no output)".into();
+    }
+    Ok(combined)
+}
+
 // ── App state
 // ─────────────────────────────────────────────────────────────────
 
@@ -281,6 +336,15 @@ pub struct App {
     pub batch_filebrowser_entries: Vec<FileBrowserEntry>,
     pub batch_filebrowser_list: ListState,
     pub batch_filebrowser_active: bool,
+
+    // Git panel (shared across upload and batch file browsers)
+    pub git_mode: bool,            // right pane shows git panel
+    pub git_repo_path: PathBuf,    // repo the panel is operating on
+    pub git_action_running: bool,
+    pub git_output: Vec<String>,   // lines from last git command
+    pub git_output_scroll: usize,  // first visible line
+    pub git_commit_msg: String,    // staging area for commit message
+    pub git_commit_edit: bool,     // typing commit message
 
     // Admin tab
     pub admin_stats: Option<serde_json::Value>,
@@ -372,6 +436,13 @@ impl App {
             batch_filebrowser_entries: Vec::new(),
             batch_filebrowser_list: ListState::default(),
             batch_filebrowser_active: false,
+            git_mode: false,
+            git_repo_path: PathBuf::new(),
+            git_action_running: false,
+            git_output: Vec::new(),
+            git_output_scroll: 0,
+            git_commit_msg: String::new(),
+            git_commit_edit: false,
             admin_stats: None,
             admin_stats_loading: false,
             admin_stats_error: None,
@@ -573,10 +644,68 @@ impl App {
                 self.nip34_connected = false;
                 self.nip34_status = format!("Error: {e}");
             }
+            AppMsg::GitDone(output) => {
+                self.git_action_running = false;
+                self.git_output = output.lines().map(String::from).collect();
+                self.git_output_scroll = 0;
+            }
+            AppMsg::GitError(e) => {
+                self.git_action_running = false;
+                self.git_output =
+                    format!("error: {e}").lines().map(String::from).collect();
+                self.git_output_scroll = 0;
+            }
         }
     }
 
-    // ── Actions ───────────────────────────────────────────────────────────────
+    // ── Git panel ─────────────────────────────────────────────────────────────
+
+    /// Open the git panel for the given repo path.
+    pub fn git_open(&mut self, path: PathBuf) {
+        self.git_repo_path = path;
+        self.git_mode = true;
+        self.git_output.clear();
+        self.git_output_scroll = 0;
+        self.git_commit_msg.clear();
+        self.git_commit_edit = false;
+        // Show status immediately on open.
+        self.run_git_action(GitAction::Status);
+    }
+
+    pub fn git_scroll_up(&mut self) {
+        self.git_output_scroll =
+            self.git_output_scroll.saturating_sub(1);
+    }
+
+    pub fn git_scroll_down(&mut self, visible_lines: usize) {
+        let max = self
+            .git_output
+            .len()
+            .saturating_sub(visible_lines);
+        self.git_output_scroll =
+            (self.git_output_scroll + 1).min(max);
+    }
+
+    pub fn run_git_action(&mut self, action: GitAction) {
+        if self.git_action_running {
+            return;
+        }
+        self.git_action_running = true;
+        self.git_output.clear();
+
+        let repo = self.git_repo_path.clone();
+        let commit_msg = self.git_commit_msg.clone();
+        let tx = self.tx.clone();
+
+        tokio::spawn(async move {
+            let result =
+                run_git_command(&repo, action, &commit_msg).await;
+            match result {
+                Ok(out) => tx.send(AppMsg::GitDone(out)).ok(),
+                Err(e) => tx.send(AppMsg::GitError(e)).ok(),
+            };
+        });
+    }
 
     pub fn refresh_blobs(&mut self) {
         if self.blobs_loading {

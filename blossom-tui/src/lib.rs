@@ -4166,14 +4166,17 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize, nip_tab: usize) {
     let popup_y = (area.height.saturating_sub(popup_h)) / 2;
     let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
 
+    let popup_bg = Color::Rgb(18, 18, 36);
     f.render_widget(Clear, popup_area);
     let help = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" Help —{tab_title}press ? to close "))
-                .border_style(Style::default().fg(COLOR_ACCENT)),
+                .border_style(Style::default().fg(COLOR_ACCENT))
+                .style(Style::default().bg(popup_bg)),
         )
+        .style(Style::default().bg(popup_bg).fg(Color::White))
         .wrap(Wrap { trim: false });
     f.render_widget(help, popup_area);
 }
@@ -4640,14 +4643,16 @@ pub fn draw_docs_fullscreen(
             .unwrap_or("?")
         ),
     };
+    let bg = Color::Rgb(10, 10, 20);
     let doc = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(title)
                 .border_style(Style::default().fg(COLOR_ACCENT))
-                .style(Style::default().bg(Color::Rgb(10, 10, 20))),
+                .style(Style::default().bg(bg)),
         )
+        .style(Style::default().bg(bg).fg(Color::White))
         .scroll((scroll, 0));
     f.render_widget(doc, area);
 }

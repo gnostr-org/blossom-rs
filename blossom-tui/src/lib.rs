@@ -1722,7 +1722,7 @@ pub fn draw_blobs_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(table, inner, &mut app.blobs_table);
 }
 
-pub fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_upload_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(" Upload File ")
@@ -1730,6 +1730,16 @@ pub fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
     let outer_inner = outer.inner(area);
     f.render_widget(outer, area);
 
+    // Horizontal split: left = file browser (40%), right = controls (60%).
+    let h_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(outer_inner);
+
+    // ── Left: file browser panel ─────────────────────────────────────────────
+    draw_upload_filebrowser(f, app, h_split[0]);
+
+    // ── Right: controls panel ────────────────────────────────────────────────
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1738,7 +1748,7 @@ pub fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(3), // controls hint
             Constraint::Min(3),    // result
         ])
-        .split(outer_inner);
+        .split(h_split[1]);
 
     let input_border_style = if app.input_mode {
         Style::default()
@@ -1848,6 +1858,13 @@ pub fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Line::from(vec![
             Span::styled(
+                "f",
+                Style::default()
+                    .fg(COLOR_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": browse    "),
+            Span::styled(
                 "i",
                 Style::default()
                     .fg(COLOR_ACCENT)
@@ -1896,6 +1913,95 @@ pub fn draw_upload_tab(f: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(COLOR_DIM));
         f.render_widget(placeholder, chunks[3]);
     }
+}
+
+/// Render the file-browser tree panel on the left side of the upload tab.
+fn draw_upload_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
+    // Border colour: accent when active, dim otherwise.
+    let border_style = if app.filebrowser_active {
+        Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(COLOR_DIM)
+    };
+
+    let cwd_label = app
+        .filebrowser_cwd
+        .to_string_lossy()
+        .into_owned();
+    // Truncate cwd to available width minus borders/title decoration.
+    let max_cwd = area.width.saturating_sub(4) as usize;
+    let cwd_display = if cwd_label.len() > max_cwd {
+        format!("…{}", &cwd_label[cwd_label.len().saturating_sub(max_cwd)..])
+    } else {
+        cwd_label
+    };
+    let title = format!(" {} ", cwd_display);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if !app.filebrowser_active && app.filebrowser_entries.is_empty() {
+        let hint = Paragraph::new("  Press f to browse files")
+            .style(Style::default().fg(COLOR_DIM));
+        f.render_widget(hint, inner);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .filebrowser_entries
+        .iter()
+        .map(|e| {
+            // Icon + label construction.
+            let (icon, base_style) = if e.is_dir {
+                ("▶ ", Style::default().fg(Color::Cyan))
+            } else {
+                ("  ", Style::default().fg(Color::White))
+            };
+            let name_span = Span::styled(format!("{icon}{}", e.name), base_style);
+
+            let mut spans = vec![name_span];
+
+            // Append git badge when relevant.
+            match &e.git {
+                Some(GitRepoKind::Repo) => {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        " git",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                Some(GitRepoKind::Bare) => {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        " bare",
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                None => {}
+            }
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let highlight_style = Style::default()
+        .bg(COLOR_SELECTED_BG)
+        .add_modifier(Modifier::BOLD);
+
+    let list = List::new(items)
+        .highlight_style(highlight_style)
+        .highlight_symbol("› ");
+
+    f.render_stateful_widget(list, inner, &mut app.filebrowser_list);
 }
 
 pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {

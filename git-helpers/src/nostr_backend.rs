@@ -503,4 +503,48 @@ mod tests {
         eprintln!("relay_list_no_url_relay_env_is_first => {list:?}");
         assert_eq!(list[0], "wss://env-relay.example.com");
     }
+
+    // ── git remote add hello-nostr nostr://<npub>/relay.ngit.dev/hello-nostr ──
+
+    /// URL from: git remote add hello-nostr nostr://npub1xjhlf.../relay.ngit.dev/hello-nostr
+    /// 3-segment form: npub / bare-relay-host / repo-name
+    #[test]
+    fn hello_nostr_remote_three_segment_relay_ngit() {
+        let url = "nostr://npub1xjhlf624uhv6vz2rfatk365vpz0w9ta2xmtw903pp35pxpy6990swl0s67/relay.ngit.dev/hello-nostr";
+        let (relay, pubkey, repo) = parse_nostr_url_inner(url, None)
+            .expect("should parse hello-nostr remote URL");
+        eprintln!("hello_nostr_remote: relay={relay} pubkey={pubkey} repo={repo}");
+        assert_eq!(relay, "wss://relay.ngit.dev");
+        assert_eq!(repo, "hello-nostr");
+        assert_eq!(pubkey.len(), 64);
+        assert!(pubkey.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hello_nostr_pubkey_decodes_correctly() {
+        let npub = "npub1xjhlf624uhv6vz2rfatk365vpz0w9ta2xmtw903pp35pxpy6990swl0s67";
+        let hex = npub_to_hex(npub).expect("valid npub");
+        eprintln!("hello_nostr_pubkey: {npub} => {hex}");
+        assert_eq!(hex.len(), 64);
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hello_nostr_relay_normalised_to_wss() {
+        // bare "relay.ngit.dev" in the URL → wss://relay.ngit.dev
+        let url = "nostr://npub1xjhlf624uhv6vz2rfatk365vpz0w9ta2xmtw903pp35pxpy6990swl0s67/relay.ngit.dev/hello-nostr";
+        let (relay, _, _) = parse_nostr_url_inner(url, None).unwrap();
+        eprintln!("hello_nostr_relay_normalised: relay.ngit.dev => {relay}");
+        assert_eq!(relay, "wss://relay.ngit.dev");
+        assert!(relay.starts_with("wss://"));
+    }
+
+    #[test]
+    fn hello_nostr_with_git_suffix() {
+        // .git suffix should be stripped
+        let url = "nostr://npub1xjhlf624uhv6vz2rfatk365vpz0w9ta2xmtw903pp35pxpy6990swl0s67/relay.ngit.dev/hello-nostr.git";
+        let (_, _, repo) = parse_nostr_url_inner(url, None).unwrap();
+        eprintln!("hello_nostr_with_git_suffix: hello-nostr.git => {repo}");
+        assert_eq!(repo, "hello-nostr");
+    }
 }

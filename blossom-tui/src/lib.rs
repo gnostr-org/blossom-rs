@@ -2002,7 +2002,11 @@ pub fn draw_upload_tab(f: &mut Frame, app: &mut App, area: Rect) {
     // ── Left: file browser panel ─────────────────────────────────────────────
     draw_upload_filebrowser(f, app, h_split[0]);
 
-    // ── Right: controls panel ────────────────────────────────────────────────
+    // ── Right: git panel (when git_mode) or controls ──────────────────────
+    if app.git_mode {
+        draw_git_panel(f, app, h_split[1]);
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -2179,6 +2183,141 @@ pub fn draw_upload_tab(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Render the file-browser tree panel on the left side of the upload tab.
+/// Git operations panel — replaces the right-hand controls pane
+/// when `app.git_mode` is true.
+fn draw_git_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let repo_name = app
+        .git_repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| app.git_repo_path.to_string_lossy().into_owned());
+
+    let running_marker = if app.git_action_running { " …" } else { "" };
+    let title = format!(" git — {repo_name}{running_marker} ");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        );
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Split: top = action menu bar, [optional commit input], bottom = output
+    let menu_height: u16 = if app.git_commit_edit { 5 } else { 3 };
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(menu_height),
+            Constraint::Min(1),
+        ])
+        .split(inner);
+
+    // Action menu
+    let accent = Style::default()
+        .fg(COLOR_ACCENT)
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(COLOR_DIM);
+
+    let menu_lines = vec![
+        Line::from(vec![
+            Span::styled("s", accent), Span::raw(":status  "),
+            Span::styled("l", accent), Span::raw(":log  "),
+            Span::styled("d", accent), Span::raw(":diff  "),
+            Span::styled("f", accent), Span::raw(":fetch"),
+        ]),
+        Line::from(vec![
+            Span::styled("p", accent), Span::raw(":pull  "),
+            Span::styled("P", accent), Span::raw(":push  "),
+            Span::styled("a", accent), Span::raw(":add -A  "),
+            Span::styled("c", accent), Span::raw(":commit  "),
+            Span::styled("Esc", accent), Span::raw(":close"),
+        ]),
+    ];
+
+    if app.git_commit_edit {
+        let commit_lines: Vec<Line> = menu_lines
+            .into_iter()
+            .chain(std::iter::once(Line::from(vec![
+                Span::styled("msg: ", dim),
+                Span::styled(
+                    app.git_commit_msg.as_str(),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled("█", Style::default().fg(COLOR_ACCENT)),
+            ])))
+            .collect();
+        f.render_widget(
+            Paragraph::new(commit_lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Commit message (Enter: commit, Esc: cancel) "),
+            ),
+            split[0],
+        );
+        // cursor inside the commit block
+        f.set_cursor_position((
+            split[0].x + 1 + "msg: ".len() as u16
+                + app.git_commit_msg.len() as u16,
+            split[0].y + 3,
+        ));
+    } else {
+        f.render_widget(
+            Paragraph::new(menu_lines).block(
+                Block::default().borders(Borders::ALL).title(" Actions "),
+            ),
+            split[0],
+        );
+    }
+
+    // Output area
+    let output_area = split[1];
+    let visible_height = output_area.height.saturating_sub(2) as usize;
+    let scroll = app.git_output_scroll;
+    let lines: Vec<Line> = app
+        .git_output
+        .iter()
+        .skip(scroll)
+        .take(visible_height)
+        .map(|l| {
+            // Colour-code common git prefixes.
+            let style = if l.starts_with('+') && !l.starts_with("+++") {
+                Style::default().fg(COLOR_OK)
+            } else if l.starts_with('-') && !l.starts_with("---") {
+                Style::default().fg(COLOR_ERR)
+            } else if l.starts_with('M') || l.starts_with("modified") {
+                Style::default().fg(Color::Yellow)
+            } else if l.starts_with('?') || l.starts_with("Untracked") {
+                Style::default().fg(COLOR_DIM)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            Line::from(Span::styled(l.as_str(), style))
+        })
+        .collect();
+
+    let total = app.git_output.len();
+    let scroll_hint = if total > visible_height {
+        format!(
+            " Output [{}/{}] ↑/↓ scroll ",
+            scroll + 1,
+            total
+        )
+    } else {
+        " Output ".into()
+    };
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(scroll_hint),
+        ),
+        output_area,
+    );
+}
+
 fn draw_upload_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
     // Border colour: accent when active, dim otherwise.
     let border_style = if app.filebrowser_active {
@@ -2187,22 +2326,20 @@ fn draw_upload_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(COLOR_DIM)
     };
 
-    let cwd_label = app
-        .filebrowser_cwd
-        .to_string_lossy()
-        .into_owned();
-    // Truncate cwd to available width minus borders/title decoration.
+    let cwd_label = app.filebrowser_cwd.to_string_lossy().into_owned();
     let max_cwd = area.width.saturating_sub(4) as usize;
     let cwd_display = if cwd_label.len() > max_cwd {
-        format!("…{}", &cwd_label[cwd_label.len().saturating_sub(max_cwd)..])
+        format!(
+            "…{}",
+            &cwd_label[cwd_label.len().saturating_sub(max_cwd)..]
+        )
     } else {
         cwd_label
     };
-    let title = format!(" {} ", cwd_display);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(title)
+        .title(format!(" {} ", cwd_display))
         .border_style(border_style);
 
     let inner = block.inner(area);
@@ -2215,56 +2352,58 @@ fn draw_upload_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    // Check if selected entry is a git repo (to show g hint).
+    let selected_is_git = app
+        .filebrowser_list
+        .selected()
+        .and_then(|i| app.filebrowser_entries.get(i))
+        .and_then(|e| e.git.as_ref())
+        .is_some();
+
+    // Reserve bottom line for git hint when applicable.
+    let (list_area, hint_area) = if selected_is_git && app.filebrowser_active {
+        let s = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+        (s[0], Some(s[1]))
+    } else {
+        (inner, None)
+    };
+
     let items: Vec<ListItem> = app
         .filebrowser_entries
         .iter()
-        .map(|e| {
-            // Icon + label construction.
-            let (icon, base_style) = if e.is_dir {
-                ("▶ ", Style::default().fg(Color::Cyan))
-            } else {
-                ("  ", Style::default().fg(Color::White))
-            };
-            let name_span = Span::styled(format!("{icon}{}", e.name), base_style);
-
-            let mut spans = vec![name_span];
-
-            // Append git badge when relevant.
-            match &e.git {
-                Some(GitRepoKind::Repo) => {
-                    spans.push(Span::raw(" "));
-                    spans.push(Span::styled(
-                        " git",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-                Some(GitRepoKind::Bare) => {
-                    spans.push(Span::raw(" "));
-                    spans.push(Span::styled(
-                        " bare",
-                        Style::default()
-                            .fg(Color::Magenta)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-                None => {}
-            }
-
-            ListItem::new(Line::from(spans))
-        })
+        .map(|e| filebrowser_list_item(e))
         .collect();
 
-    let highlight_style = Style::default()
-        .bg(COLOR_SELECTED_BG)
-        .add_modifier(Modifier::BOLD);
-
     let list = List::new(items)
-        .highlight_style(highlight_style)
+        .highlight_style(
+            Style::default()
+                .bg(COLOR_SELECTED_BG)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("› ");
 
-    f.render_stateful_widget(list, inner, &mut app.filebrowser_list);
+    f.render_stateful_widget(list, list_area, &mut app.filebrowser_list);
+
+    if let Some(ha) = hint_area {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    "  g",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    ": open git panel",
+                    Style::default().fg(COLOR_DIM),
+                ),
+            ])),
+            ha,
+        );
+    }
 }
 
 pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
@@ -2291,6 +2430,12 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
     // ── Left: file browser ───────────────────────────────────────────────────
     draw_batch_filebrowser(f, app, h_split[0]);
+
+    // ── Right: git panel (when git_mode) or controls ──────────────────────
+    if app.git_mode {
+        draw_git_panel(f, app, h_split[1]);
+        return;
+    }
 
     // ── Right: controls ──────────────────────────────────────────────────────
     let chunks = Layout::default()
@@ -2407,6 +2552,58 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// File browser panel for the batch tab.
+/// Shared helper: build a ListItem for a file browser entry.
+fn filebrowser_list_item(e: &FileBrowserEntry) -> ListItem<'static> {
+    let (icon, base_style) = if e.is_dir {
+        ("▶ ", Style::default().fg(Color::Cyan))
+    } else {
+        ("  ", Style::default().fg(Color::White))
+    };
+    let mut spans =
+        vec![Span::styled(format!("{icon}{}", e.name), base_style)];
+    match &e.git {
+        Some(GitRepoKind::Repo) => {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                " git",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        Some(GitRepoKind::Bare) => {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                " bare",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        None => {}
+    }
+    ListItem::new(Line::from(spans))
+}
+
+/// Render the bottom git-hint line inside a file browser panel.
+fn render_git_hint(f: &mut Frame, area: Rect) {
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "  g",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                ": open git panel",
+                Style::default().fg(COLOR_DIM),
+            ),
+        ])),
+        area,
+    );
+}
+
 fn draw_batch_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
     let border_style = if app.batch_filebrowser_active {
         Style::default()
@@ -2439,48 +2636,39 @@ fn draw_batch_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
     if !app.batch_filebrowser_active
         && app.batch_filebrowser_entries.is_empty()
     {
-        let hint = Paragraph::new("  Press f to browse files")
-            .style(Style::default().fg(COLOR_DIM));
-        f.render_widget(hint, inner);
+        f.render_widget(
+            Paragraph::new("  Press f to browse files")
+                .style(Style::default().fg(COLOR_DIM)),
+            inner,
+        );
         return;
     }
+
+    let selected_is_git = app
+        .batch_filebrowser_list
+        .selected()
+        .and_then(|i| app.batch_filebrowser_entries.get(i))
+        .and_then(|e| e.git.as_ref())
+        .is_some();
+
+    let (list_area, hint_area) =
+        if selected_is_git && app.batch_filebrowser_active {
+            let s = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(inner);
+            (s[0], Some(s[1]))
+        } else {
+            (inner, None)
+        };
 
     let items: Vec<ListItem> = app
         .batch_filebrowser_entries
         .iter()
-        .map(|e| {
-            let (icon, base_style) = if e.is_dir {
-                ("▶ ", Style::default().fg(Color::Cyan))
-            } else {
-                ("  ", Style::default().fg(Color::White))
-            };
-            let mut spans =
-                vec![Span::styled(format!("{icon}{}", e.name), base_style)];
-
-            match &e.git {
-                Some(GitRepoKind::Repo) => {
-                    spans.push(Span::raw(" "));
-                    spans.push(Span::styled(
-                        " git",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-                Some(GitRepoKind::Bare) => {
-                    spans.push(Span::raw(" "));
-                    spans.push(Span::styled(
-                        " bare",
-                        Style::default()
-                            .fg(Color::Magenta)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-                None => {}
-            }
-
-            ListItem::new(Line::from(spans))
-        })
+        .map(filebrowser_list_item)
         .collect();
 
     let list = List::new(items)
@@ -2493,9 +2681,13 @@ fn draw_batch_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
 
     f.render_stateful_widget(
         list,
-        inner,
+        list_area,
         &mut app.batch_filebrowser_list,
     );
+
+    if let Some(ha) = hint_area {
+        render_git_hint(f, ha);
+    }
 }
 
 pub fn draw_admin_tab(f: &mut Frame, app: &App, area: Rect) {

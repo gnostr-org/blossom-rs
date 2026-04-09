@@ -43,7 +43,8 @@ pub const COLOR_TITLE_BG: Color = Color::DarkGray;
 
 // ── Sort/Filter ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SortField {
     #[default]
     Date,
@@ -2774,4 +2775,127 @@ pub fn decode_secret_key(input: &str) -> Result<String, String> {
         }
         Ok(input.to_string())
     }
+}
+
+// ── Persistent state ──────────────────────────────────────────────────────────
+
+/// User-facing configuration and UI preferences persisted between sessions.
+///
+/// All fields are `Option` so missing keys in a saved file are treated as
+/// "not set" and fall back gracefully to env-vars or compiled defaults.
+///
+/// The file is written to `~/.config/blossom-tui/state.json` (respecting
+/// `$XDG_CONFIG_HOME`) on clean exit and loaded on startup.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TuiState {
+    /// Blossom server URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// Secret key in hex (64 chars). Stored as-is; protect the file
+    /// appropriately (mode 0600).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_key: Option<String>,
+    /// Last active tab index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab: Option<usize>,
+    /// Blob list sort preference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_field: Option<SortField>,
+    /// Active blob filter string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_str: Option<String>,
+    /// Whether to publish a NIP-94 event after upload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publish_nip94: Option<bool>,
+    /// Relay URL used for NIP-94 publishing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publish_relay: Option<String>,
+    /// NIP-34 relay URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nip34_relay: Option<String>,
+}
+
+impl App {
+    /// Snapshot the persistent fields into a [`TuiState`].
+    pub fn to_state(&self) -> TuiState {
+        TuiState {
+            server: Some(self.server.clone()),
+            secret_key: self.secret_key.clone(),
+            tab: Some(self.tab),
+            sort_field: Some(self.sort_field),
+            filter_str: if self.filter_str.is_empty() {
+                None
+            } else {
+                Some(self.filter_str.clone())
+            },
+            publish_nip94: Some(self.publish_nip94),
+            publish_relay: if self.publish_relay.is_empty() {
+                None
+            } else {
+                Some(self.publish_relay.clone())
+            },
+            nip34_relay: if self.nip34_relay.is_empty() {
+                None
+            } else {
+                Some(self.nip34_relay.clone())
+            },
+        }
+    }
+
+    /// Apply saved state fields that were not explicitly overridden by the
+    /// caller. Call this right after `App::new` before the first render.
+    pub fn apply_state(&mut self, state: &TuiState) {
+        if let Some(t) = state.tab {
+            self.tab = t.min(TAB_NAMES.len().saturating_sub(1));
+        }
+        if let Some(sf) = state.sort_field {
+            self.sort_field = sf;
+        }
+        if let Some(f) = &state.filter_str {
+            self.filter_str = f.clone();
+        }
+        if let Some(v) = state.publish_nip94 {
+            self.publish_nip94 = v;
+        }
+        if let Some(r) = &state.publish_relay {
+            self.publish_relay = r.clone();
+        }
+        if let Some(r) = &state.nip34_relay {
+            self.nip34_relay = r.clone();
+        }
+    }
+}
+
+/// Return the path to the state file, honouring `$XDG_CONFIG_HOME`.
+pub fn state_path() -> Option<PathBuf> {
+    let config_dir = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .ok()?;
+    Some(config_dir.join("blossom-tui").join("state.json"))
+}
+
+/// Load [`TuiState`] from disk. Returns a default (empty) state on any error.
+pub fn load_state() -> TuiState {
+    let Some(path) = state_path() else {
+        return TuiState::default();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return TuiState::default();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+/// Persist [`TuiState`] to disk, creating the config directory if needed.
+pub fn save_state(state: &TuiState) -> Result<(), Box<dyn std::error::Error>> {
+    let path = state_path().ok_or("cannot determine state file path")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(state)?;
+    // Write to a temp file then rename for atomicity.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json.as_bytes())?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
 }

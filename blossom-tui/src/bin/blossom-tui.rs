@@ -2,7 +2,7 @@
 
 use std::io;
 
-use blossom_tui::{App, AppMsg, run_loop};
+use blossom_tui::{App, AppMsg, load_state, run_loop, save_state};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -13,7 +13,8 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (server, secret_key) = parse_args()?;
+    let saved = load_state();
+    let (server, secret_key) = parse_args(&saved)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -23,11 +24,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     let mut app = App::new(server, secret_key, tx);
+    // Restore UI preferences from the saved state (server/key already applied
+    // by parse_args; only UI fields are applied here).
+    app.apply_state(&saved);
 
     app.refresh_blobs();
     app.refresh_status();
 
     let result = run_loop(&mut terminal, &mut app, &mut rx).await;
+
+    // Persist state before tearing down the terminal so any I/O errors are
+    // visible in the restored terminal output.
+    if let Err(e) = save_state(&app.to_state()) {
+        eprintln!("blossom-tui: failed to save state: {e}");
+    }
 
     disable_raw_mode()?;
     execute!(
@@ -40,11 +50,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-fn parse_args() -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
-    let mut server =
-        std::env::var("BLOSSOM_SERVER").unwrap_or_else(|_| "http://localhost:3000".into());
-    let mut secret_key: Option<String> = std::env::var("BLOSSOM_SECRET_KEY").ok();
+fn parse_args(saved: &blossom_tui::TuiState) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+    // Priority: CLI arg > env var > saved state > compiled default.
+    let mut server = saved
+        .server
+        .clone()
+        .unwrap_or_else(|| "http://localhost:3000".into());
+    // Env var overrides saved state.
+    if let Ok(v) = std::env::var("BLOSSOM_SERVER") {
+        server = v;
+    }
 
+    let mut secret_key: Option<String> = saved.secret_key.clone();
+    if let Ok(v) = std::env::var("BLOSSOM_SECRET_KEY") {
+        secret_key = Some(v);
+    }
+
+    // Explicit CLI flags take highest priority.
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1usize;
     while i < args.len() {
@@ -87,5 +109,9 @@ fn print_usage() {
     println!("  -V, --version        Print version info\n");
     println!("ENV:");
     println!("  BLOSSOM_SERVER       Server URL (fallback when --server not set)");
-    println!("  BLOSSOM_SECRET_KEY   Secret key (fallback when --key not set)");
+    println!("  BLOSSOM_SECRET_KEY   Secret key (fallback when --key not set)\n");
+    println!("STATE:");
+    println!("  ~/.config/blossom-tui/state.json  Persisted UI state (loaded on startup,");
+    println!("                                    written on clean exit). Protect this file");
+    println!("                                    if it contains a secret key (mode 0600).");
 }

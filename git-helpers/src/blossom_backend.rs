@@ -114,6 +114,23 @@ impl BlossomRemote {
         }
     }
 
+    /// Create with a pre-built reqwest client (e.g. one configured with a SOCKS5 proxy).
+    pub fn with_client(
+        client: reqwest::blocking::Client,
+        nsec: Option<String>,
+        server: &str,
+        pubkey: &str,
+        repo: &str,
+    ) -> Self {
+        Self {
+            server: server.trim_end_matches('/').to_string(),
+            pubkey: pubkey.to_string(),
+            repo: repo.to_string(),
+            nsec,
+            client,
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────
 
     /// Query BUD-02 (`GET /<pubkey>`) and return the newest refs manifest

@@ -1,30 +1,17 @@
-//! git-remotes — `git-remote-blossom` and `git-remote-nostr` helpers.
+//! git-remotes — git remote helper binaries for multiple protocols.
 //!
-//! This crate provides two git remote helper binaries that extend git with
-//! support for Blossom blob storage and Nostr NIP-34 git repositories.
-//!
-//! ## Install
-//! ```bash
-//! cargo install --path git-helpers
-//! # or from the workspace root:
-//! cargo build -p git-remotes --release
-//! # copy both binaries somewhere on $PATH
-//! ```
-//!
-//! ## Usage
-//! ```bash
-//! # Blossom remote — stores git bundles as Blossom blobs
-//! git clone blossom://<server>/<pubkey>/<repo>
-//! git remote add origin blossom://<server>/<pubkey>/<repo>
-//!
-//! # Nostr remote — resolves NIP-34 RepoAnnounce → GRASP HTTP server
-//! git clone nostr://<npub>/<repo>
-//! NOSTR_RELAY=wss://relay.example.com git clone nostr://<npub>/<repo>
-//! git clone nostr+wss://relay.example.com/<npub>/<repo>
-//! ```
+//! Provides git-remote helper binaries extending git with:
+//! - `git-remote-blossom`: Blossom blob storage (BUD-01/02, kind:24242 auth)
+//! - `git-remote-nostr`: NIP-34 repos resolved via Nostr relay → GRASP HTTP
+//! - `git-remote-ipfs`: IPFS/Kubo MFS storage (ipfs://)
+//! - `git-remote-pkarr`: PKARR DHT discovery → Blossom endpoint (pkarr://)
+//! - `git-remote-tor`: Blossom over Tor SOCKS5 proxy (blossom+onion://, tor://)
 
 pub mod auth;
 pub mod blossom_backend;
+pub mod ipfs_backend;
 pub mod nostr_backend;
 pub mod nostr_relay;
+pub mod pkarr_backend;
 pub mod protocol;
+pub mod tor_backend;

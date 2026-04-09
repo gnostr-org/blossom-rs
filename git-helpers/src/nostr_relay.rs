@@ -160,26 +160,69 @@ async fn ws_query(relay_url: &str, pubkey_hex: &str, repo: &str) -> Result<Strin
     })
 }
 
-/// Extract a web/clone URL from a NIP-34 kind:30617 event's tags.
+/// Extract a GRASP clone/web URL from a NIP-34 kind:30617 event's tags.
 ///
 /// Tag priority:
-/// 1. `["clone", "<url>"]` — git clone URL (HTTP smart protocol)
-/// 2. `["web", "<url>"]`   — canonical web view
+/// 1. `["clone", "<url>", ...]` — first HTTPS URL in a clone tag
+/// 2. `["web",   "<url>"]`     — fallback if no clone tag present
+///
+/// The `clone` tag may list multiple URLs (all in the same tag array).  We
+/// return the first one that starts with `https://` or `http://`.
 fn extract_web_url(event: &Value) -> Option<String> {
     let tags = event["tags"].as_array()?;
 
-    // Try "clone" first (direct git smart HTTP), then "web"
-    for preferred in ["clone", "web"] {
-        for tag in tags {
-            let arr = tag.as_array()?;
-            if arr.first().and_then(|v| v.as_str()) == Some(preferred) {
-                if let Some(url) = arr.get(1).and_then(|v| v.as_str()) {
+    // Try all clone tags first — pick first HTTP(S) value in each
+    for tag in tags {
+        let arr = tag.as_array()?;
+        if arr.first().and_then(|v| v.as_str()) != Some("clone") {
+            continue;
+        }
+        for val in arr.iter().skip(1) {
+            if let Some(url) = val.as_str() {
+                if url.starts_with("https://") || url.starts_with("http://") {
                     return Some(url.to_string());
                 }
             }
         }
     }
+
+    // Fall back to first web tag
+    for tag in tags {
+        let arr = tag.as_array()?;
+        if arr.first().and_then(|v| v.as_str()) == Some("web") {
+            if let Some(url) = arr.get(1).and_then(|v| v.as_str()) {
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    return Some(url.to_string());
+                }
+            }
+        }
+    }
+
     None
+}
+
+/// Extract relay URLs from the `relays` tag of a kind:30617 event.
+///
+/// These can supplement the query relay list for subsequent fallback attempts.
+/// Trailing slashes are stripped and URLs are normalised.
+pub fn extract_event_relays(event: &Value) -> Vec<String> {
+    let Some(tags) = event["tags"].as_array() else {
+        return vec![];
+    };
+
+    for tag in tags {
+        let Some(arr) = tag.as_array() else { continue };
+        if arr.first().and_then(|v| v.as_str()) != Some("relays") {
+            continue;
+        }
+        return arr
+            .iter()
+            .skip(1)
+            .filter_map(|v| v.as_str())
+            .map(|r| normalize_relay_url(r.trim_end_matches('/')))
+            .collect();
+    }
+    vec![]
 }
 
 // ── NIP-19 npub decoder ────────────────────────────────────────────────────
@@ -206,6 +249,206 @@ pub fn npub_to_hex(npub: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Real event fixtures (from `gnostr query --kinds 30617 --limit 10`) ─
+
+    /// YouBlossom — clone tag has TWO URLs; web tag is a subdomain.
+    fn event_youblossom() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "pubkey": "5c1eeccff05aa3ff47bc56fa80bc5c254a8eb67c3a8be2d29bf9b142aa57a7da",
+            "tags": [
+                ["d", "YouBlossom"],
+                ["name", "YouBlossom"],
+                ["clone",
+                    "https://git.shakespeare.diy/npub1ts0wenlst23l73au2magp0zuy49gadnu8297955mlxc592jh5ldq0xzwcx/YouBlossom.git",
+                    "https://relay.ngit.dev/npub1ts0wenlst23l73au2magp0zuy49gadnu8297955mlxc592jh5ldq0xzwcx/YouBlossom.git"
+                ],
+                ["relays",
+                    "wss://git.shakespeare.diy/",
+                    "wss://relay.ngit.dev/",
+                    "wss://nos.lol/",
+                    "wss://relay.damus.io/",
+                    "wss://relay.primal.net/"
+                ],
+                ["web", "https://YouBlossom.shakespeare.wtf"],
+                ["web", "https://YouBlossom.shakespeare.wtf"],
+                ["alt", "git repository: YouBlossom"]
+            ]
+        })
+    }
+
+    /// fresh-repo — single clone URL; relay list is a single relay.
+    fn event_fresh_repo() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "pubkey": "b1576eb99a4774158a32fc5e190afa3ded4da19f51fbfa0b1a1bf6421ea5733a",
+            "tags": [
+                ["d", "fresh-repo"],
+                ["name", "fresh-repo"],
+                ["clone", "https://blossom.gnostr.cloud/npub1k9tkawv6ga6ptz3jl30pjzh68hk5mgvl28al5zc6r0myy849wvaq38a70g/fresh-repo.git"],
+                ["web", "https://gitworkshop.dev/repo/fresh-repo"],
+                ["relays", "wss://blossom.gnostr.cloud"],
+                ["alt", "git repository: fresh-repo"]
+            ]
+        })
+    }
+
+    /// jmp — two clone URLs; relays with no trailing slashes.
+    fn event_jmp() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "pubkey": "7459d333af66066f066cf87796e690db3a96ff4534f9edf4eab74df2f207289b",
+            "tags": [
+                ["d", "jmp"],
+                ["name", "jmp"],
+                ["description", "JoinMarket Protocol (JMP) Specifications"],
+                ["clone",
+                    "https://relay.ngit.dev/npub1w3vaxva0vcrx7pnvlpmede5smvafdl69xnu7ma82kaxl9us89zdsht4c5c/jmp.git",
+                    "https://gitnostr.com/npub1w3vaxva0vcrx7pnvlpmede5smvafdl69xnu7ma82kaxl9us89zdsht4c5c/jmp.git"
+                ],
+                ["web", "https://gitworkshop.dev/npub1w3vaxva0vcrx7pnvlpmede5smvafdl69xnu7ma82kaxl9us89zdsht4c5c/relay.ngit.dev/jmp"],
+                ["relays", "wss://relay.ngit.dev", "wss://gitnostr.com"]
+            ]
+        })
+    }
+
+    /// Beer — NO clone tag, only web tags; relays have trailing slashes.
+    fn event_beer() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "pubkey": "c62ea154ea5352df528b9bb79fdfcd0432636371098d4336943ace394a70b555",
+            "tags": [
+                ["d", "Beer"],
+                ["name", "iDrink"],
+                ["relays",
+                    "wss://git.shakespeare.diy/",
+                    "wss://relay.ngit.dev/",
+                    "wss://relay.primal.net/",
+                    "wss://relay.damus.io/",
+                    "wss://relay.westernbtc.com/"
+                ],
+                ["web", "https://iBeer.shakespeare.wtf"],
+                ["alt", "git repository: Beer"]
+            ]
+        })
+    }
+
+    /// satshoot — two clone URLs from different GRASP servers.
+    fn event_satshoot() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "pubkey": "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90",
+            "tags": [
+                ["d", "satshoot"],
+                ["name", "satshoot"],
+                ["clone",
+                    "https://grasp.budabit.club/npub16p8v7varqwjes5hak6q7mz6pygqm4pwc6gve4mrned3xs8tz42gq7kfhdw/satshoot.git",
+                    "https://gitnostr.com/npub16p8v7varqwjes5hak6q7mz6pygqm4pwc6gve4mrned3xs8tz42gq7kfhdw/satshoot.git"
+                ],
+                ["web", "https://gitnostr.com/npub16p8v7varqwjes5hak6q7mz6pygqm4pwc6gve4mrned3xs8tz42gq7kfhdw/satshoot"],
+                ["relays", "wss://gitnostr.com", "wss://relay.primal.net", "wss://nos.lol", "wss://relay.damus.io", "wss://grasp.budabit.club"]
+            ]
+        })
+    }
+
+    /// Minimal event — no clone, no web, no relays tags.
+    fn event_empty() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [["d", "empty-repo"], ["name", "empty"]]
+        })
+    }
+
+    // ── extract_web_url ───────────────────────────────────────────────────
+
+    #[test]
+    fn multi_clone_returns_first_url() {
+        // YouBlossom has two URLs in the clone tag — first wins
+        let url = extract_web_url(&event_youblossom()).unwrap();
+        assert_eq!(
+            url,
+            "https://git.shakespeare.diy/npub1ts0wenlst23l73au2magp0zuy49gadnu8297955mlxc592jh5ldq0xzwcx/YouBlossom.git"
+        );
+    }
+
+    #[test]
+    fn single_clone_returned() {
+        let url = extract_web_url(&event_fresh_repo()).unwrap();
+        assert_eq!(
+            url,
+            "https://blossom.gnostr.cloud/npub1k9tkawv6ga6ptz3jl30pjzh68hk5mgvl28al5zc6r0myy849wvaq38a70g/fresh-repo.git"
+        );
+    }
+
+    #[test]
+    fn clone_takes_priority_over_web() {
+        // jmp has both clone and web; clone should win
+        let url = extract_web_url(&event_jmp()).unwrap();
+        assert!(url.starts_with("https://relay.ngit.dev/"), "expected ngit clone, got: {url}");
+    }
+
+    #[test]
+    fn falls_back_to_web_when_no_clone() {
+        // Beer has no clone tag — falls back to web
+        let url = extract_web_url(&event_beer()).unwrap();
+        assert_eq!(url, "https://iBeer.shakespeare.wtf");
+    }
+
+    #[test]
+    fn satshoot_first_clone_url() {
+        let url = extract_web_url(&event_satshoot()).unwrap();
+        assert!(
+            url.starts_with("https://grasp.budabit.club/"),
+            "expected budabit.club as first clone, got: {url}"
+        );
+    }
+
+    #[test]
+    fn empty_event_returns_none() {
+        assert!(extract_web_url(&event_empty()).is_none());
+    }
+
+    // ── extract_event_relays ──────────────────────────────────────────────
+
+    #[test]
+    fn extract_relays_from_youblossom() {
+        let relays = extract_event_relays(&event_youblossom());
+        // Trailing slashes must be stripped
+        assert!(relays.contains(&"wss://git.shakespeare.diy".to_string()));
+        assert!(relays.contains(&"wss://relay.ngit.dev".to_string()));
+        assert!(relays.contains(&"wss://nos.lol".to_string()));
+        assert_eq!(relays.len(), 5);
+    }
+
+    #[test]
+    fn extract_relays_trailing_slashes_stripped() {
+        let relays = extract_event_relays(&event_youblossom());
+        for r in &relays {
+            assert!(!r.ends_with('/'), "relay has trailing slash: {r}");
+        }
+    }
+
+    #[test]
+    fn extract_relays_single_entry() {
+        let relays = extract_event_relays(&event_fresh_repo());
+        assert_eq!(relays, vec!["wss://blossom.gnostr.cloud"]);
+    }
+
+    #[test]
+    fn extract_relays_no_tag_returns_empty() {
+        assert!(extract_event_relays(&event_empty()).is_empty());
+    }
+
+    #[test]
+    fn extract_relays_normalises_bare_hosts() {
+        let event = serde_json::json!({
+            "tags": [["relays", "relay.damus.io", "nos.lol"]]
+        });
+        let relays = extract_event_relays(&event);
+        assert_eq!(relays[0], "wss://relay.damus.io");
+        assert_eq!(relays[1], "wss://nos.lol");
+    }
 
     // ── normalize_relay_url ───────────────────────────────────────────────
 
@@ -248,6 +491,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn normalize_trailing_slash_handled_by_caller() {
+        // normalize_relay_url does NOT strip trailing slash — callers do
+        // (extract_event_relays strips it before calling)
+        let r = normalize_relay_url("wss://relay.damus.io/");
+        assert_eq!(r, "wss://relay.damus.io/");
+    }
+
     // ── build_relay_list ──────────────────────────────────────────────────
 
     #[test]
@@ -258,10 +509,9 @@ mod tests {
 
     #[test]
     fn relay_list_no_duplicates() {
-        // If primary is one of the defaults, it should only appear once
         let list = build_relay_list(Some("wss://relay.damus.io"));
-        let damus_count = list.iter().filter(|r| r.as_str() == "wss://relay.damus.io").count();
-        assert_eq!(damus_count, 1, "damus should appear exactly once: {list:?}");
+        let count = list.iter().filter(|r| r.as_str() == "wss://relay.damus.io").count();
+        assert_eq!(count, 1, "damus should appear once: {list:?}");
     }
 
     #[test]
@@ -273,7 +523,7 @@ mod tests {
 
     #[test]
     fn relay_list_normalises_primary() {
-        let list = build_relay_list(Some("relay.damus.io")); // bare hostname
+        let list = build_relay_list(Some("relay.damus.io"));
         assert_eq!(list[0], "wss://relay.damus.io");
     }
 
@@ -289,14 +539,29 @@ mod tests {
 
     #[test]
     fn npub_hex_passthrough() {
-        let hex = "ee".repeat(32); // 64 chars
+        let hex = "ee".repeat(32);
         assert_eq!(npub_to_hex(&hex).unwrap(), hex);
     }
 
     #[test]
-    fn npub_hex_uppercased_lowercased() {
+    fn npub_hex_uppercased_normalised_to_lowercase() {
         let upper = "EE".repeat(32);
         assert_eq!(npub_to_hex(&upper).unwrap(), "ee".repeat(32));
+    }
+
+    #[test]
+    fn npub_real_pubkeys_from_events() {
+        // Real pubkeys seen in the queried events
+        for hex in [
+            "5c1eeccff05aa3ff47bc56fa80bc5c254a8eb67c3a8be2d29bf9b142aa57a7da",
+            "b1576eb99a4774158a32fc5e190afa3ded4da19f51fbfa0b1a1bf6421ea5733a",
+            "7459d333af66066f066cf87796e690db3a96ff4534f9edf4eab74df2f207289b",
+            "34aff4e955e5d9a609434f5768ea8c089ee2afaa36d6e2be210c6813049a295f",
+            "d04ecf33a303a59852fdb681ed8b412201ba85d8d2199aec73cb62681d62aa90",
+        ] {
+            let out = npub_to_hex(hex).unwrap_or_else(|_| panic!("failed for {hex}"));
+            assert_eq!(out, hex, "hex pubkey should pass through unchanged");
+        }
     }
 
     #[test]

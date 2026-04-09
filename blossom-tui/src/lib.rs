@@ -568,6 +568,7 @@ impl App {
             batch_filebrowser_active: false,
             git_mode: false,
             git_repo_path: PathBuf::new(),
+            git_repo_info: None,
             git_action_running: false,
             git_output: Vec::new(),
             git_output_scroll: 0,
@@ -2696,23 +2697,32 @@ fn filebrowser_list_item(e: &FileBrowserEntry) -> ListItem<'static> {
     let mut spans =
         vec![Span::styled(format!("{icon}{}", e.name), base_style)];
     match &e.git {
-        Some(GitRepoKind::Repo) => {
+        Some(info) => {
+            let (badge, color) = match info.kind {
+                GitRepoKind::Repo => (" git", Color::Yellow),
+                GitRepoKind::Bare => (" bare", Color::Magenta),
+            };
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                " git",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                badge,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
-        }
-        Some(GitRepoKind::Bare) => {
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                " bare",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            // show branch when known
+            if let Some(branch) = &info.branch {
+                spans.push(Span::styled(
+                    format!(":{branch}"),
+                    Style::default().fg(COLOR_DIM),
+                ));
+            }
+            // show in-progress state badge
+            if let Some(state) = &info.state {
+                spans.push(Span::styled(
+                    format!(" [{}]", state.label()),
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
         }
         None => {}
     }
@@ -3325,7 +3335,7 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             5 => " r:refresh  Tab:next  ?:help  q:quit",
             6 => " r:edit-relay  c:connect  ↑↓:scroll  Tab:next  ?:help  q:quit",
             7 => " r:refresh  Tab:next  ?:help  q:quit",
-            8 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey  Tab:next  ?:help  q:quit",
+            8 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey-hex  4:copy-npub  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -3561,8 +3571,9 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
             vec![
                 kv("  g                ", "Generate new BIP-340 keypair"),
                 kv("  1                ", "Copy secret key (hex) to clipboard"),
-                kv("  2                ", "Copy nsec (bech32) to clipboard"),
+                kv("  2                ", "Copy nsec (NIP-19 bech32) to clipboard"),
                 kv("  3                ", "Copy public key (hex) to clipboard"),
+                kv("  4                ", "Copy npub (NIP-19 bech32) to clipboard"),
             ],
         ),
         _ => ("", vec![]),
@@ -4028,6 +4039,7 @@ pub async fn run_loop(
                         KeyCode::Char('1') => app.copy_keygen_field(1),
                         KeyCode::Char('2') => app.copy_keygen_field(2),
                         KeyCode::Char('3') => app.copy_keygen_field(3),
+                        KeyCode::Char('4') => app.copy_keygen_field(4),
                         _ => {}
                     },
                     _ => {}
@@ -4148,20 +4160,16 @@ pub fn days_to_ymd(d: u64) -> (u64, u64, u64) {
 }
 
 /// Encode a hex secret key as `nsec1` bech32.
+/// Delegates to [`nip19::seckey_to_nsec`].
 pub fn encode_nsec(hex_key: &str) -> Result<String, String> {
-    let bytes = hex::decode(hex_key).map_err(|e| format!("invalid hex: {e}"))?;
-    let hrp = bech32::Hrp::parse("nsec").map_err(|e| format!("hrp: {e}"))?;
-    bech32::encode::<bech32::Bech32>(hrp, &bytes).map_err(|e| format!("bech32: {e}"))
+    nip19::seckey_to_nsec(hex_key).map_err(|e| e.to_string())
 }
 
 /// Decode a secret key from hex or `nsec1` bech32.
+/// Delegates to [`nip19::nsec_to_seckey`] for bech32 input.
 pub fn decode_secret_key(input: &str) -> Result<String, String> {
     if input.starts_with("nsec1") {
-        let (hrp, data) = bech32::decode(input).map_err(|e| format!("invalid nsec1: {e}"))?;
-        if hrp.as_str() != "nsec" {
-            return Err(format!("expected nsec hrp, got {hrp}"));
-        }
-        Ok(hex::encode(data))
+        nip19::nsec_to_seckey(input).map_err(|e| e.to_string())
     } else {
         if input.len() != 64 || !input.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err("invalid hex key: expected 64 hex characters".into());

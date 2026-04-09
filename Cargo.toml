@@ -1,6 +1,25 @@
 [workspace]
 members = [".", "blossom-server", "blossom-cli", "xtask", "blossom-nip34", "blossom-tui"]
 
+[workspace.package]
+version = "0.5.4"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/MonumentalSystems/blossom-rs"
+
+[workspace.dependencies]
+blossom-rs = { path = "." }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "http2", "rustls-tls"] }
+hex = "0.4"
+bech32 = "0.11"
+ratatui = "0.30"
+crossterm = "0.29"
+tracing = "0.1"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+
 [package]
 name = "blossom-rs"
 version = "0.5.4"

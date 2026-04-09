@@ -43,17 +43,18 @@ pub fn sign_event(
         .iter()
         .map(|row| row.iter().map(|s| Value::String(s.clone())).collect())
         .collect();
-    let tags_json = serde_json::to_value(&tags_value).unwrap_or(json!([]));
-    let _ = tags_json; // used for future reference only = blossom_rs::protocol::compute_event_id(
+
+    let event_id_bytes = blossom_rs::protocol::compute_event_id(
         &pubkey_hex,
         created_at,
         kind,
         &tags,
         content,
     );
+    let event_id = hex::encode(event_id_bytes);
 
     // Sign the id.
-    let id_bytes = hex::decode(&event_id).map_err(|_| SignError::Internal)?;
+    let id_bytes = event_id_bytes;
     let msg = Message::from_digest_slice(&id_bytes).map_err(|_| SignError::Internal)?;
     let sig = secp.sign_schnorr_no_aux_rand(&msg, &kp);
     let sig_hex = hex::encode(sig.serialize());

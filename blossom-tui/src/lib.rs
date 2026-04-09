@@ -3006,9 +3006,27 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
         2 => (
             " Batch ",
             vec![
+                kv("  f                ", "Browse file tree"),
                 kv("  i                ", "Add a file path to the queue"),
                 kv("  x                ", "Remove last queued item"),
                 kv("  Enter            ", "Start batch upload"),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  File browser (f to open)",
+                    Style::default().fg(COLOR_DIM),
+                )),
+                kv("  ↑ / k            ", "Navigate up"),
+                kv("  ↓ / j            ", "Navigate down"),
+                kv(
+                    "  Enter            ",
+                    "Enter dir / add file to queue",
+                ),
+                kv(
+                    "  Backspace / h / -",
+                    "Go to parent directory",
+                ),
+                kv("  Esc              ", "Go up (close at root)"),
+                kv("  f                ", "Close file browser"),
             ],
         ),
         // Admin
@@ -3302,12 +3320,56 @@ pub async fn run_loop(
                             }
                         }
                     }
-                    2 => match key.code {
-                        KeyCode::Char('i') => app.batch_input_mode = true,
-                        KeyCode::Enter => app.start_batch_upload(),
-                        KeyCode::Char('x') => app.remove_last_batch_item(),
-                        _ => {}
-                    },
+                    2 => {
+                        if app.batch_filebrowser_active {
+                            match key.code {
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.batch_filebrowser_scroll_up()
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.batch_filebrowser_scroll_down()
+                                }
+                                KeyCode::Enter => {
+                                    app.batch_filebrowser_enter()
+                                }
+                                KeyCode::Backspace
+                                | KeyCode::Char('h')
+                                | KeyCode::Char('-')
+                                | KeyCode::Esc => {
+                                    if app
+                                        .batch_filebrowser_cwd
+                                        .parent()
+                                        .is_some()
+                                    {
+                                        app.batch_filebrowser_parent();
+                                    } else {
+                                        app.batch_filebrowser_active =
+                                            false;
+                                    }
+                                }
+                                KeyCode::Char('f') => {
+                                    app.batch_filebrowser_active = false
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Char('f') => {
+                                    app.batch_filebrowser_activate()
+                                }
+                                KeyCode::Char('i') => {
+                                    app.batch_input_mode = true
+                                }
+                                KeyCode::Enter => {
+                                    app.start_batch_upload()
+                                }
+                                KeyCode::Char('x') => {
+                                    app.remove_last_batch_item()
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     3 => {
                         if key.code == KeyCode::Char('r') {
                             app.refresh_admin();

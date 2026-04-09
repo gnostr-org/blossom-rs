@@ -23,6 +23,9 @@ use crate::Nip34State;
 /// - `POST /{npub}/{repo}/git-upload-pack` — fetch objects (public)
 /// - `POST /{npub}/{repo}/git-receive-pack` — push objects (auth required)
 pub fn git_router() -> axum::Router<Arc<Nip34State>> {
+    // {repo} captures both "test-repo" and "test-repo.git" — handlers
+    // strip the .git suffix. This is compatible with ngit/git-remote-nostr
+    // which appends .git to clone URLs.
     axum::Router::new()
         .route("/{npub}/{repo}/info/refs", axum::routing::get(info_refs))
         .route(

@@ -2737,11 +2737,22 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
         1 => (
             " Upload ",
             vec![
+                kv("  f                ", "Browse file tree"),
                 kv("  i                ", "Enter file-path edit mode"),
                 kv("  p                ", "Toggle NIP-94 publish"),
                 kv("  R                ", "Edit relay URL"),
                 kv("  Enter            ", "Start upload"),
                 kv("  Esc              ", "Exit edit mode / clear path"),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  File browser (f to open)",
+                    Style::default().fg(COLOR_DIM),
+                )),
+                kv("  ↑ / k            ", "Navigate up"),
+                kv("  ↓ / j            ", "Navigate down"),
+                kv("  Enter            ", "Enter dir / accept file"),
+                kv("  Backspace / h / -", "Go to parent directory"),
+                kv("  f / Esc          ", "Close file browser"),
             ],
         ),
         // Batch
@@ -3000,17 +3011,42 @@ pub async fn run_loop(
                         KeyCode::Enter => app.open_selected_blob(),
                         _ => {}
                     },
-                    1 => match key.code {
-                        KeyCode::Char('i') => app.input_mode = true,
-                        KeyCode::Char('p') => app.publish_nip94 = !app.publish_nip94,
-                        KeyCode::Char('R') => app.publish_relay_edit = true,
-                        KeyCode::Enter => app.start_upload(),
-                        KeyCode::Esc => {
-                            app.upload_path.clear();
-                            app.upload_msg = None;
+                    1 => {
+                        // File browser takes priority when active.
+                        if app.filebrowser_active {
+                            match key.code {
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.filebrowser_scroll_up()
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.filebrowser_scroll_down()
+                                }
+                                KeyCode::Enter => app.filebrowser_enter(),
+                                KeyCode::Backspace
+                                | KeyCode::Char('h')
+                                | KeyCode::Char('-') => app.filebrowser_parent(),
+                                KeyCode::Char('f') | KeyCode::Esc => {
+                                    app.filebrowser_active = false
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Char('f') => app.filebrowser_activate(),
+                                KeyCode::Char('i') => app.input_mode = true,
+                                KeyCode::Char('p') => {
+                                    app.publish_nip94 = !app.publish_nip94
+                                }
+                                KeyCode::Char('R') => app.publish_relay_edit = true,
+                                KeyCode::Enter => app.start_upload(),
+                                KeyCode::Esc => {
+                                    app.upload_path.clear();
+                                    app.upload_msg = None;
+                                }
+                                _ => {}
+                            }
                         }
-                        _ => {}
-                    },
+                    }
                     2 => match key.code {
                         KeyCode::Char('i') => app.batch_input_mode = true,
                         KeyCode::Enter => app.start_batch_upload(),

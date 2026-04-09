@@ -689,12 +689,24 @@ impl App {
         } else {
             Some(sel)
         });
+        self.filebrowser_sync_path();
+    }
+
+    /// Mirror the highlighted entry's path into the File Path field.
+    fn filebrowser_sync_path(&mut self) {
+        if let Some(idx) = self.filebrowser_list.selected() {
+            if let Some(entry) = self.filebrowser_entries.get(idx) {
+                self.upload_path =
+                    entry.path.to_string_lossy().into_owned();
+            }
+        }
     }
 
     pub fn filebrowser_scroll_up(&mut self) {
         let i = self.filebrowser_list.selected().unwrap_or(0);
         if i > 0 {
             self.filebrowser_list.select(Some(i - 1));
+            self.filebrowser_sync_path();
         }
     }
 
@@ -702,6 +714,7 @@ impl App {
         let max = self.filebrowser_entries.len().saturating_sub(1);
         let i = self.filebrowser_list.selected().unwrap_or(0);
         self.filebrowser_list.select(Some((i + 1).min(max)));
+        self.filebrowser_sync_path();
     }
 
     /// Enter a directory or accept a file into `upload_path`.
@@ -715,7 +728,7 @@ impl App {
         if entry.is_dir {
             self.filebrowser_cwd = entry.path.clone();
             self.filebrowser_list.select(Some(0));
-            self.filebrowser_load();
+            self.filebrowser_load(); // also calls sync_path
         } else {
             self.upload_path = entry.path.to_string_lossy().into_owned();
             self.filebrowser_active = false;
@@ -724,10 +737,12 @@ impl App {
 
     /// Navigate to the parent directory.
     pub fn filebrowser_parent(&mut self) {
-        if let Some(parent) = self.filebrowser_cwd.parent().map(|p| p.to_path_buf()) {
+        if let Some(parent) =
+            self.filebrowser_cwd.parent().map(|p| p.to_path_buf())
+        {
             self.filebrowser_cwd = parent;
             self.filebrowser_list.select(Some(0));
-            self.filebrowser_load();
+            self.filebrowser_load(); // also calls sync_path
         }
     }
 
@@ -736,6 +751,8 @@ impl App {
         self.filebrowser_active = true;
         if self.filebrowser_entries.is_empty() {
             self.filebrowser_load();
+        } else {
+            self.filebrowser_sync_path();
         }
     }
 

@@ -350,6 +350,28 @@ pub fn detect_git_repo(dir: &std::path::Path) -> Option<GitRepoKind> {
     detect_git_info(dir).map(|i| i.kind)
 }
 
+/// Walk `path` and its ancestors until a git root is found.
+/// Returns `(root_path, GitRepoInfo)` for the nearest enclosing repo, or
+/// `None` if `path` is not inside any git repository.
+pub fn find_git_root(
+    path: &std::path::Path,
+) -> Option<(PathBuf, GitRepoInfo)> {
+    let mut dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+    loop {
+        if let Some(info) = detect_git_info(&dir) {
+            return Some((dir, info));
+        }
+        match dir.parent() {
+            Some(p) => dir = p.to_path_buf(),
+            None => return None,
+        }
+    }
+}
+
 /// Git operations available from the file browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitAction {
@@ -877,6 +899,35 @@ impl App {
             (self.git_output_scroll + 1).min(max);
     }
 
+    /// Auto-open or close the git panel based on whether `cwd` is inside a
+    /// git repository. Called automatically by both file browser load methods.
+    ///
+    /// - Inside a repo → open panel (if not already open for the same root),
+    ///   refresh `git status`, store `GitRepoInfo`.
+    /// - Outside any repo → close the panel.
+    pub fn update_git_panel_for_cwd(&mut self, cwd: &PathBuf) {
+        match find_git_root(cwd) {
+            Some((root, info)) => {
+                // Only reset output / run status when the root changes.
+                let changed = self.git_repo_path != root;
+                self.git_repo_path = root;
+                self.git_repo_info = Some(info);
+                if !self.git_mode {
+                    self.git_mode = true;
+                    self.git_output.clear();
+                    self.git_output_scroll = 0;
+                }
+                if changed || self.git_output.is_empty() {
+                    self.run_git_action(GitAction::Status);
+                }
+            }
+            None => {
+                self.git_mode = false;
+                self.git_repo_info = None;
+            }
+        }
+    }
+
     pub fn run_git_action(&mut self, action: GitAction) {
         if self.git_action_running {
             return;
@@ -990,6 +1041,7 @@ impl App {
 
     /// (Re)load `filebrowser_entries` from `filebrowser_cwd`.
     /// Directories are listed first, then files, both sorted case-insensitively.
+    /// Also auto-opens the git panel when the CWD is inside a git repo.
     pub fn filebrowser_load(&mut self) {
         let mut dirs: Vec<FileBrowserEntry> = Vec::new();
         let mut files: Vec<FileBrowserEntry> = Vec::new();
@@ -1021,6 +1073,10 @@ impl App {
             Some(sel)
         });
         self.filebrowser_sync_path();
+
+        // Auto-reveal the git panel when CWD is inside a git repo.
+        let cwd = self.filebrowser_cwd.clone();
+        self.update_git_panel_for_cwd(&cwd);
     }
 
     /// Mirror the highlighted entry's path into the File Path field.
@@ -1126,6 +1182,10 @@ impl App {
                 Some(sel)
             });
         self.batch_filebrowser_sync_path();
+
+        // Auto-reveal the git panel when CWD is inside a git repo.
+        let cwd = self.batch_filebrowser_cwd.clone();
+        self.update_git_panel_for_cwd(&cwd);
     }
 
     fn batch_filebrowser_sync_path(&mut self) {
@@ -2390,8 +2450,16 @@ fn draw_git_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| app.git_repo_path.to_string_lossy().into_owned());
 
+    // Show branch info from GitRepoInfo when available.
+    let branch_label = app
+        .git_repo_info
+        .as_ref()
+        .and_then(|i| i.branch.as_deref())
+        .map(|b| format!(" [{b}]"))
+        .unwrap_or_default();
+
     let running_marker = if app.git_action_running { " …" } else { "" };
-    let title = format!(" git — {repo_name}{running_marker} ");
+    let title = format!(" git — {repo_name}{branch_label}{running_marker} ");
 
     let block = Block::default()
         .borders(Borders::ALL)

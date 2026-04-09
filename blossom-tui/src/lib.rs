@@ -19,7 +19,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap},
+    widgets::{Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, TableState, Tabs, Wrap},
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -165,6 +165,59 @@ pub struct BatchItem {
     pub status: BatchStatus,
 }
 
+// ── File browser
+// ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRepoKind {
+    /// Contains a `.git` file or directory.
+    Repo,
+    /// No `.git`, but has `HEAD` + `objects/` + `refs/` at root — a bare clone.
+    Bare,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileBrowserEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+    /// Set when the entry is a directory that is (or contains) a git repo.
+    pub git: Option<GitRepoKind>,
+}
+
+impl FileBrowserEntry {
+    fn new(path: PathBuf) -> Self {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let is_dir = path.is_dir();
+        let git = if is_dir {
+            detect_git_repo(&path)
+        } else {
+            None
+        };
+        Self { name, path, is_dir, git }
+    }
+}
+
+/// Detect whether `dir` is a git working tree or a bare repository.
+/// Uses only cheap `exists()` / `is_dir()` calls — no subprocess.
+pub fn detect_git_repo(dir: &std::path::Path) -> Option<GitRepoKind> {
+    // Working tree: .git file (worktree/submodule) or .git directory.
+    if dir.join(".git").exists() {
+        return Some(GitRepoKind::Repo);
+    }
+    // Bare clone: HEAD + objects/ + refs/ present at the root, no .git.
+    if dir.join("HEAD").is_file()
+        && dir.join("objects").is_dir()
+        && dir.join("refs").is_dir()
+    {
+        return Some(GitRepoKind::Bare);
+    }
+    None
+}
+
 // ── App state
 // ─────────────────────────────────────────────────────────────────
 
@@ -201,6 +254,12 @@ pub struct App {
     pub publish_nip94: bool,      // toggle: publish NIP-94 after upload
     pub publish_relay: String,    // relay URL for NIP-94 publishing
     pub publish_relay_edit: bool, // editing relay URL field
+
+    // File browser (upload tab)
+    pub filebrowser_cwd: PathBuf,
+    pub filebrowser_entries: Vec<FileBrowserEntry>,
+    pub filebrowser_list: ListState,
+    pub filebrowser_active: bool, // true = tree pane has keyboard focus
 
     // Status tab
     pub status_data: Option<serde_json::Value>,
@@ -289,6 +348,10 @@ impl App {
             publish_nip94: false,
             publish_relay: String::new(),
             publish_relay_edit: false,
+            filebrowser_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+            filebrowser_entries: Vec::new(),
+            filebrowser_list: ListState::default(),
+            filebrowser_active: false,
             status_data: None,
             status_loading: false,
             status_error: None,
@@ -590,6 +653,90 @@ impl App {
                 }
             }
         });
+    }
+
+    // ── File browser methods ──────────────────────────────────────────────────
+
+    /// (Re)load `filebrowser_entries` from `filebrowser_cwd`.
+    /// Directories are listed first, then files, both sorted case-insensitively.
+    pub fn filebrowser_load(&mut self) {
+        let mut dirs: Vec<FileBrowserEntry> = Vec::new();
+        let mut files: Vec<FileBrowserEntry> = Vec::new();
+
+        if let Ok(rd) = std::fs::read_dir(&self.filebrowser_cwd) {
+            for entry in rd.flatten() {
+                let e = FileBrowserEntry::new(entry.path());
+                if e.is_dir {
+                    dirs.push(e);
+                } else {
+                    files.push(e);
+                }
+            }
+        }
+
+        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        self.filebrowser_entries = dirs.into_iter().chain(files).collect();
+        // Keep selection in bounds.
+        let sel = self
+            .filebrowser_list
+            .selected()
+            .unwrap_or(0)
+            .min(self.filebrowser_entries.len().saturating_sub(1));
+        self.filebrowser_list.select(if self.filebrowser_entries.is_empty() {
+            None
+        } else {
+            Some(sel)
+        });
+    }
+
+    pub fn filebrowser_scroll_up(&mut self) {
+        let i = self.filebrowser_list.selected().unwrap_or(0);
+        if i > 0 {
+            self.filebrowser_list.select(Some(i - 1));
+        }
+    }
+
+    pub fn filebrowser_scroll_down(&mut self) {
+        let max = self.filebrowser_entries.len().saturating_sub(1);
+        let i = self.filebrowser_list.selected().unwrap_or(0);
+        self.filebrowser_list.select(Some((i + 1).min(max)));
+    }
+
+    /// Enter a directory or accept a file into `upload_path`.
+    pub fn filebrowser_enter(&mut self) {
+        let Some(idx) = self.filebrowser_list.selected() else {
+            return;
+        };
+        let Some(entry) = self.filebrowser_entries.get(idx) else {
+            return;
+        };
+        if entry.is_dir {
+            self.filebrowser_cwd = entry.path.clone();
+            self.filebrowser_list.select(Some(0));
+            self.filebrowser_load();
+        } else {
+            self.upload_path = entry.path.to_string_lossy().into_owned();
+            self.filebrowser_active = false;
+        }
+    }
+
+    /// Navigate to the parent directory.
+    pub fn filebrowser_parent(&mut self) {
+        if let Some(parent) = self.filebrowser_cwd.parent().map(|p| p.to_path_buf()) {
+            self.filebrowser_cwd = parent;
+            self.filebrowser_list.select(Some(0));
+            self.filebrowser_load();
+        }
+    }
+
+    /// Activate the file browser, loading entries if empty.
+    pub fn filebrowser_activate(&mut self) {
+        self.filebrowser_active = true;
+        if self.filebrowser_entries.is_empty() {
+            self.filebrowser_load();
+        }
     }
 
     pub fn delete_selected(&mut self) {

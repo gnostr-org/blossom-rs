@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 // ── Constants ────────────────────────────────────────────────────────────────
 
 pub const APP_TITLE: &str = "blossom-tui";
-pub const TAB_NAMES: &[&str] = &[" Blobs ", " Upload ", " Batch ", " Admin ", " Relay ", " Status ", " Keygen "];
+pub const TAB_NAMES: &[&str] = &[" Blobs ", " Upload ", " Batch ", " Admin ", " Relay ", " NIP-96 ", " Status ", " Keygen "];
 
 pub const COLOR_ACCENT: Color = Color::Cyan;
 pub const COLOR_OK: Color = Color::Green;
@@ -103,6 +103,10 @@ pub enum AppMsg {
     AdminUsersError(String),
     RelayPolicyLoaded(serde_json::Value),
     RelayPolicyError(String),
+    Nip96InfoLoaded(serde_json::Value),
+    Nip96InfoError(String),
+    Nip96FilesLoaded(serde_json::Value),
+    Nip96FilesError(String),
 }
 
 // ── Batch upload ──────────────────────────────────────────────────────────────
@@ -181,6 +185,14 @@ pub struct App {
     pub relay_policy_loading: bool,
     pub relay_policy_error: Option<String>,
 
+    // NIP-96 tab
+    pub nip96_info: Option<serde_json::Value>,
+    pub nip96_info_loading: bool,
+    pub nip96_info_error: Option<String>,
+    pub nip96_files: Option<serde_json::Value>,
+    pub nip96_files_loading: bool,
+    pub nip96_files_error: Option<String>,
+
     // UI state
     pub show_help: bool,
     pub notification: Option<(String, bool)>, // (message, is_error)
@@ -234,6 +246,12 @@ impl App {
             relay_policy: None,
             relay_policy_loading: false,
             relay_policy_error: None,
+            nip96_info: None,
+            nip96_info_loading: false,
+            nip96_info_error: None,
+            nip96_files: None,
+            nip96_files_loading: false,
+            nip96_files_error: None,
             show_help: false,
             notification: None,
             modal: None,
@@ -371,6 +389,24 @@ impl App {
             AppMsg::RelayPolicyError(e) => {
                 self.relay_policy_loading = false;
                 self.relay_policy_error = Some(e);
+            }
+            AppMsg::Nip96InfoLoaded(data) => {
+                self.nip96_info_loading = false;
+                self.nip96_info = Some(data);
+                self.nip96_info_error = None;
+            }
+            AppMsg::Nip96InfoError(e) => {
+                self.nip96_info_loading = false;
+                self.nip96_info_error = Some(e);
+            }
+            AppMsg::Nip96FilesLoaded(data) => {
+                self.nip96_files_loading = false;
+                self.nip96_files = Some(data);
+                self.nip96_files_error = None;
+            }
+            AppMsg::Nip96FilesError(e) => {
+                self.nip96_files_loading = false;
+                self.nip96_files_error = Some(e);
             }
         }
     }
@@ -776,6 +812,63 @@ impl App {
         });
     }
 
+    /// Fetch NIP-96 server info and file list.
+    pub fn refresh_nip96(&mut self) {
+        if self.nip96_info_loading {
+            return;
+        }
+        self.nip96_info_loading = true;
+        self.nip96_files_loading = true;
+        let server = self.server.clone();
+        let secret_key = self.secret_key.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let base = server.trim_end_matches('/');
+            // Fetch /.well-known/nostr/nip96.json
+            let info_url = format!("{}/.well-known/nostr/nip96.json", base);
+            match reqwest::get(&info_url).await {
+                Ok(r) if r.status().is_success() => {
+                    match r.json::<serde_json::Value>().await {
+                        Ok(v) => tx.send(AppMsg::Nip96InfoLoaded(v)).ok(),
+                        Err(e) => tx.send(AppMsg::Nip96InfoError(format!("parse: {e}"))).ok(),
+                    }
+                }
+                Ok(r) => {
+                    tx.send(AppMsg::Nip96InfoError(format!("HTTP {}", r.status()))).ok()
+                }
+                Err(e) => tx.send(AppMsg::Nip96InfoError(format!("request: {e}"))).ok(),
+            };
+
+            // Fetch /n96?page=1&count=50 (requires auth if server enforces it)
+            let files_url = format!("{}/n96?page=1&count=50", base);
+            let client = reqwest::Client::new();
+            let mut req = client.get(&files_url);
+            if let Some(key) = &secret_key {
+                if let Ok(signer) = blossom_rs::auth::Signer::from_secret_hex(key) {
+                    let auth_event = blossom_rs::auth::build_nip98_auth(
+                        &signer,
+                        &files_url,
+                        "GET",
+                    );
+                    let token = blossom_rs::auth::auth_header_value(&auth_event);
+                    req = req.header("Authorization", token);
+                }
+            }
+            match req.send().await {
+                Ok(r) if r.status().is_success() => {
+                    match r.json::<serde_json::Value>().await {
+                        Ok(v) => tx.send(AppMsg::Nip96FilesLoaded(v)).ok(),
+                        Err(e) => tx.send(AppMsg::Nip96FilesError(format!("parse: {e}"))).ok(),
+                    }
+                }
+                Ok(r) => {
+                    tx.send(AppMsg::Nip96FilesError(format!("HTTP {}", r.status()))).ok()
+                }
+                Err(e) => tx.send(AppMsg::Nip96FilesError(format!("request: {e}"))).ok(),
+            };
+        });
+    }
+
     /// Add a path to the batch queue.
     pub fn add_batch_path(&mut self) {
         let path = self.batch_input.trim().to_string();
@@ -879,8 +972,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         2 => draw_batch_tab(f, app, chunks[2]),
         3 => draw_admin_tab(f, app, chunks[2]),
         4 => draw_relay_tab(f, app, chunks[2]),
-        5 => draw_status_tab(f, app, chunks[2]),
-        6 => draw_keygen_tab(f, app, chunks[2]),
+        5 => draw_nip96_tab(f, app, chunks[2]),
+        6 => draw_status_tab(f, app, chunks[2]),
+        7 => draw_keygen_tab(f, app, chunks[2]),
         _ => {}
     }
 
@@ -1380,6 +1474,112 @@ pub fn draw_relay_tab(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+pub fn draw_nip96_tab(f: &mut Frame, app: &App, area: Rect) {
+    // Split into top (server info) and bottom (file list)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+
+    // ── NIP-96 server capabilities ────────────────────────────────────────────
+    let info_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" NIP-96 Server Info (.well-known/nostr/nip96.json) ")
+        .border_style(Style::default().fg(COLOR_ACCENT));
+    let info_inner = info_block.inner(chunks[0]);
+    f.render_widget(info_block, chunks[0]);
+
+    let info_text = if app.nip96_info_loading {
+        "Loading…".to_string()
+    } else if let Some(e) = &app.nip96_info_error {
+        format!("Error: {e}\n\nPress 'r' to retry.")
+    } else if let Some(info) = &app.nip96_info {
+        // Pretty-print key fields
+        let mut lines = Vec::new();
+        if let Some(api) = info.get("api_url").and_then(|v| v.as_str()) {
+            lines.push(format!("api_url:      {api}"));
+        }
+        if let Some(dl) = info.get("download_url").and_then(|v| v.as_str()) {
+            lines.push(format!("download_url: {dl}"));
+        }
+        if let Some(nips) = info.get("supported_nips") {
+            lines.push(format!("supported:    {nips}"));
+        }
+        if let Some(max) = info.get("max_byte_size").and_then(|v| v.as_u64()) {
+            let mb = max / (1024 * 1024);
+            lines.push(format!("max_size:     {max} bytes ({mb} MB)"));
+        }
+        if let Some(types) = info.get("content_types") {
+            lines.push(format!("content_types:{types}"));
+        }
+        if let Some(plans) = info.get("plans") {
+            lines.push(format!("\nPlans:\n{}", serde_json::to_string_pretty(plans).unwrap_or_default()));
+        }
+        if lines.is_empty() {
+            serde_json::to_string_pretty(info).unwrap_or_else(|_| info.to_string())
+        } else {
+            lines.join("\n")
+        }
+    } else {
+        "Press 'r' to load NIP-96 server info.".to_string()
+    };
+
+    f.render_widget(
+        Paragraph::new(info_text.as_str())
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(Color::White)),
+        info_inner,
+    );
+
+    // ── NIP-96 file list ──────────────────────────────────────────────────────
+    let files_title = if app.nip96_files_loading {
+        " NIP-96 Files (loading…) ".to_string()
+    } else {
+        " NIP-96 Files (/n96) ".to_string()
+    };
+    let files_block = Block::default()
+        .borders(Borders::ALL)
+        .title(files_title.as_str())
+        .border_style(Style::default().fg(COLOR_ACCENT));
+    let files_inner = files_block.inner(chunks[1]);
+    f.render_widget(files_block, chunks[1]);
+
+    let files_text = if let Some(e) = &app.nip96_files_error {
+        format!("Error: {e}\n\nNote: file listing requires authentication.")
+    } else if let Some(files) = &app.nip96_files {
+        // Try to extract file list from NIP-96 response
+        let items = files.get("files")
+            .or_else(|| files.get("data"))
+            .and_then(|v| v.as_array());
+        if let Some(arr) = items {
+            if arr.is_empty() {
+                "(no files)".to_string()
+            } else {
+                arr.iter().take(20).map(|f| {
+                    let hash = f.get("ox").or_else(|| f.get("x"))
+                        .and_then(|v| v.as_str()).unwrap_or("?");
+                    let mime = f.get("m").and_then(|v| v.as_str()).unwrap_or("?");
+                    let url = f.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    format!("{:.16}  {:<20}  {}", hash, mime, url)
+                }).collect::<Vec<_>>().join("\n")
+            }
+        } else {
+            serde_json::to_string_pretty(files).unwrap_or_else(|_| files.to_string())
+        }
+    } else if !app.nip96_files_loading {
+        "(no data — press 'r' to load)".to_string()
+    } else {
+        String::new()
+    };
+
+    f.render_widget(
+        Paragraph::new(files_text.as_str())
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(Color::White)),
+        files_inner,
+    );
+}
+
 pub fn draw_status_tab(f: &mut Frame, app: &App, area: Rect) {
     let loading_suffix = if app.status_loading {
         " (loading…)"
@@ -1506,7 +1706,8 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             3 => " r:refresh  Tab:next  ?:help  q:quit",
             4 => " r:refresh  Tab:next  ?:help  q:quit",
             5 => " r:refresh  Tab:next  ?:help  q:quit",
-            6 => " g:generate  Tab:next  ?:help  q:quit",
+            6 => " r:refresh  Tab:next  ?:help  q:quit",
+            7 => " g:generate  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -1652,6 +1853,13 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("  Esc              ", y),
             Span::raw("Exit edit mode / clear path"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  NIP-96 tab", h)),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  r                ", y),
+            Span::raw("Refresh NIP-96 server info + files"),
         ]),
         Line::from(""),
         Line::from(Span::styled("  Status tab", h)),
@@ -1842,10 +2050,15 @@ pub async fn run_loop(
                     }
                     5 => {
                         if key.code == KeyCode::Char('r') {
-                            app.refresh_status();
+                            app.refresh_nip96();
                         }
                     }
                     6 => {
+                        if key.code == KeyCode::Char('r') {
+                            app.refresh_status();
+                        }
+                    }
+                    7 => {
                         if key.code == KeyCode::Char('g') {
                             app.generate_keypair();
                         }

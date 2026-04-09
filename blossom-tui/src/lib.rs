@@ -33,7 +33,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 pub const APP_TITLE: &str = "blossom-tui";
 pub const TAB_NAMES: &[&str] = &[
     " Blobs ", " Upload ", " Batch ", " Admin ", " Relay ", " NIP-96 ", " NIP-34 ", " Status ",
-    " Keygen ",
+    " Keygen ", " Profile ",
 ];
 
 pub const COLOR_ACCENT: Color = Color::Cyan;
@@ -507,6 +507,20 @@ pub struct App {
     pub nip34_connected: bool,
     pub nip34_status: String, // connection status message
 
+    // Profile tab (NIP-01 kind:0)
+    pub profile_name: String,
+    pub profile_about: String,
+    pub profile_picture: String,
+    pub profile_nip05: String,
+    pub profile_website: String,
+    pub profile_lud16: String,
+    pub profile_loading: bool,
+    pub profile_error: Option<String>,
+    pub profile_edit_field: usize, // 0=name,1=about,2=picture,3=nip05,4=website,5=lud16
+    pub profile_editing: bool,     // currently typing in a field
+    pub profile_nostr_relay: String, // relay to fetch/publish profile
+    pub profile_relay_edit: bool,
+
     // UI state
     pub show_help: bool,
     pub notification: Option<(String, bool)>, // (message, is_error)
@@ -597,6 +611,18 @@ impl App {
             nip34_events_table: TableState::default(),
             nip34_connected: false,
             nip34_status: "Press 'c' to connect to a NIP-34 relay.".into(),
+            profile_name: String::new(),
+            profile_about: String::new(),
+            profile_picture: String::new(),
+            profile_nip05: String::new(),
+            profile_website: String::new(),
+            profile_lud16: String::new(),
+            profile_loading: false,
+            profile_error: None,
+            profile_edit_field: 0,
+            profile_editing: false,
+            profile_nostr_relay: String::new(),
+            profile_relay_edit: false,
             show_help: false,
             notification: None,
             modal: None,
@@ -1890,6 +1916,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         6 => draw_nip34_tab(f, app, chunks[2]),
         7 => draw_status_tab(f, app, chunks[2]),
         8 => draw_keygen_tab(f, app, chunks[2]),
+        9 => draw_profile_tab(f, app, chunks[2]),
         _ => {}
     }
 
@@ -3338,6 +3365,7 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             6 => " r:edit-relay  c:connect  ↑↓:scroll  Tab:next  ?:help  q:quit",
             7 => " r:refresh  Tab:next  ?:help  q:quit",
             8 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey-hex  4:copy-npub  Tab:next  ?:help  q:quit",
+            9 => " 1-6:select  e:edit  r:relay  P:publish-kind0  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -3412,6 +3440,124 @@ pub fn draw_modal_input(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new("Enter: confirm   Esc: cancel").style(Style::default().fg(COLOR_DIM)),
         inner_chunks[2],
     );
+}
+
+pub fn draw_profile_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    use ratatui::layout::Flex;
+
+    let fields = [
+        ("Name",       app.profile_name.as_str()),
+        ("About",      app.profile_about.as_str()),
+        ("Picture URL", app.profile_picture.as_str()),
+        ("NIP-05",     app.profile_nip05.as_str()),
+        ("Website",    app.profile_website.as_str()),
+        ("LUD-16",     app.profile_lud16.as_str()),
+    ];
+
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // relay bar
+            Constraint::Min(0),     // fields
+            Constraint::Length(2),  // hints
+        ])
+        .split(area);
+
+    // ── Relay bar ────────────────────────────────────────────────────────────
+    let relay_label = if app.profile_relay_edit { "Relay [editing]: " } else { "Relay: " };
+    let relay_display = if app.profile_nostr_relay.is_empty() {
+        "<none — press 'r' to set>".to_string()
+    } else {
+        app.profile_nostr_relay.clone()
+    };
+    let relay_style = if app.profile_relay_edit {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(COLOR_DIM)
+    };
+    f.render_widget(
+        Paragraph::new(format!("{relay_label}{relay_display}"))
+            .style(relay_style)
+            .block(Block::default().borders(Borders::ALL).title(" Nostr Relay ")),
+        outer[0],
+    );
+
+    // ── Field rows ───────────────────────────────────────────────────────────
+    let rows_area = outer[1];
+    let row_h = 3u16;
+    let max_fields = ((rows_area.height as usize) / row_h as usize).min(fields.len());
+
+    let constraints: Vec<Constraint> = (0..max_fields)
+        .map(|_| Constraint::Length(row_h))
+        .collect();
+    let row_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(rows_area);
+
+    for (i, ((label, value), chunk)) in
+        fields.iter().take(max_fields).zip(row_chunks.iter()).enumerate()
+    {
+        let is_active = i == app.profile_edit_field && app.profile_editing;
+        let border_style = if i == app.profile_edit_field {
+            if is_active {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(COLOR_ACCENT)
+            }
+        } else {
+            Style::default()
+        };
+        let display = if is_active {
+            format!("{value}█") // cursor indicator
+        } else if value.is_empty() {
+            format!("<{}>", label.to_lowercase().replace(' ', "_"))
+        } else {
+            value.to_string()
+        };
+        f.render_widget(
+            Paragraph::new(display)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border_style)
+                        .title(format!(" [{}] {} ", i + 1, label)),
+                )
+                .wrap(ratatui::widgets::Wrap { trim: true }),
+            *chunk,
+        );
+    }
+
+    // ── Hints ────────────────────────────────────────────────────────────────
+    let (hint_left, hint_right) = if app.profile_editing {
+        ("Enter/Esc: finish edit  Backspace: delete", "")
+    } else if app.profile_relay_edit {
+        ("Enter/Esc: finish  Type relay URL", "")
+    } else {
+        (
+            "1-6: select field  e/Enter: edit  r: relay  F: fetch  P: publish",
+            if app.profile_loading { "Loading…" } else { "" },
+        )
+    };
+    let hints = Paragraph::new(format!("{hint_left}  {hint_right}"))
+        .style(Style::default().fg(COLOR_DIM));
+    f.render_widget(hints, outer[2]);
+
+    // ── Error banner ─────────────────────────────────────────────────────────
+    if let Some(err) = &app.profile_error {
+        let err_msg = err.clone();
+        let err_area = Rect {
+            x: area.x + 1,
+            y: area.y + area.height.saturating_sub(3),
+            width: area.width.saturating_sub(2),
+            height: 1,
+        };
+        f.render_widget(
+            Paragraph::new(format!("⚠ {err_msg}"))
+                .style(Style::default().fg(COLOR_ERR)),
+            err_area,
+        );
+    }
 }
 
 pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
@@ -3576,6 +3722,16 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  2                ", "Copy nsec (NIP-19 bech32) to clipboard"),
                 kv("  3                ", "Copy public key (hex) to clipboard"),
                 kv("  4                ", "Copy npub (NIP-19 bech32) to clipboard"),
+            ],
+        ),
+        9 => (
+            " Profile (NIP-01) ",
+            vec![
+                kv("  1-6              ", "Select field to edit"),
+                kv("  e / Enter        ", "Edit selected field"),
+                kv("  r                ", "Set Nostr relay URL"),
+                kv("  P                ", "Publish kind:0 metadata event"),
+                kv("  Esc              ", "Stop editing current field"),
             ],
         ),
         _ => ("", vec![]),
@@ -4044,6 +4200,113 @@ pub async fn run_loop(
                         KeyCode::Char('4') => app.copy_keygen_field(4),
                         _ => {}
                     },
+                    9 => {
+                        // Profile tab
+                        if app.profile_relay_edit {
+                            match key.code {
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    app.profile_relay_edit = false;
+                                }
+                                KeyCode::Char(c) => {
+                                    app.profile_nostr_relay.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.profile_nostr_relay.pop();
+                                }
+                                _ => {}
+                            }
+                        } else if app.profile_editing {
+                            match key.code {
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    app.profile_editing = false;
+                                }
+                                KeyCode::Char(c) => {
+                                    match app.profile_edit_field {
+                                        0 => app.profile_name.push(c),
+                                        1 => app.profile_about.push(c),
+                                        2 => app.profile_picture.push(c),
+                                        3 => app.profile_nip05.push(c),
+                                        4 => app.profile_website.push(c),
+                                        5 => app.profile_lud16.push(c),
+                                        _ => {}
+                                    }
+                                }
+                                KeyCode::Backspace => {
+                                    match app.profile_edit_field {
+                                        0 => { app.profile_name.pop(); }
+                                        1 => { app.profile_about.pop(); }
+                                        2 => { app.profile_picture.pop(); }
+                                        3 => { app.profile_nip05.pop(); }
+                                        4 => { app.profile_website.pop(); }
+                                        5 => { app.profile_lud16.pop(); }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Char('1') => app.profile_edit_field = 0,
+                                KeyCode::Char('2') => app.profile_edit_field = 1,
+                                KeyCode::Char('3') => app.profile_edit_field = 2,
+                                KeyCode::Char('4') => app.profile_edit_field = 3,
+                                KeyCode::Char('5') => app.profile_edit_field = 4,
+                                KeyCode::Char('6') => app.profile_edit_field = 5,
+                                KeyCode::Char('e') | KeyCode::Enter => {
+                                    app.profile_editing = true;
+                                }
+                                KeyCode::Char('r') => {
+                                    app.profile_relay_edit = true;
+                                }
+                                KeyCode::Char('P') => {
+                                    // Publish kind:0
+                                    if let Some(sk) = &app.secret_key {
+                                        let mut meta =
+                                            serde_json::Map::new();
+                                        macro_rules! ins {
+                                            ($k:expr, $v:expr) => {
+                                                if !$v.is_empty() {
+                                                    meta.insert(
+                                                        $k.into(),
+                                                        serde_json::Value::String($v.clone()),
+                                                    );
+                                                }
+                                            };
+                                        }
+                                        ins!("name",    app.profile_name);
+                                        ins!("about",   app.profile_about);
+                                        ins!("picture", app.profile_picture);
+                                        ins!("nip05",   app.profile_nip05);
+                                        ins!("website", app.profile_website);
+                                        ins!("lud16",   app.profile_lud16);
+                                        match crate::nostr_sign::kind0_metadata(sk, &meta) {
+                                            Ok(ev) => {
+                                                app.notification = Some((
+                                                    format!(
+                                                        "Profile event id: {}",
+                                                        &ev["id"].as_str().unwrap_or("")[..8]
+                                                    ),
+                                                    false,
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                app.notification = Some((
+                                                    format!("Sign error: {e}"),
+                                                    true,
+                                                ));
+                                            }
+                                        }
+                                    } else {
+                                        app.notification = Some((
+                                            "No private key — go to Keygen tab first".into(),
+                                            true,
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

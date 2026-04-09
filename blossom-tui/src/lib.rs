@@ -32,8 +32,12 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 pub const APP_TITLE: &str = "blossom-tui";
 pub const TAB_NAMES: &[&str] = &[
-    " Blobs ", " Upload ", " Batch ", " Admin ", " Relay ", " NIP-65 ", " NIP-96 ",
-    " NIP-34 ", " NIP-B7 ", " Status ", " Keygen ", " Profile ",
+    " Blobs ", " Upload ", " Batch ", " Admin ", " Relay ",
+    " NIPs ", " Status ", " Keygen ",
+];
+
+pub const NIP_TAB_NAMES: &[&str] = &[
+    " NIP-65 ", " NIP-96 ", " NIP-34 ", " NIP-B7 ", " Profile ",
 ];
 
 pub const COLOR_ACCENT: Color = Color::Cyan;
@@ -443,6 +447,7 @@ pub struct App {
 
     // Navigation
     pub tab: usize,
+    pub nip_tab: usize, // selected NIP sub-tab (0=NIP-65…4=Profile)
 
     // Blobs tab
     pub blobs: Vec<BlobDescriptor>,
@@ -589,6 +594,7 @@ impl App {
             secret_key,
             pubkey,
             tab: 0,
+            nip_tab: 0,
             blobs: Vec::new(),
             blobs_table,
             blobs_loading: false,
@@ -2004,20 +2010,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         2 => draw_batch_tab(f, app, chunks[2]),
         3 => draw_admin_tab(f, app, chunks[2]),
         4 => draw_relay_tab(f, app, chunks[2]),
-        5 => draw_nip65_tab(f, app, chunks[2]),
-        6 => draw_nip96_tab(f, app, chunks[2]),
-        7 => draw_nip34_tab(f, app, chunks[2]),
-        8 => draw_nipb7_tab(f, app, chunks[2]),
-        9 => draw_status_tab(f, app, chunks[2]),
-        10 => draw_keygen_tab(f, app, chunks[2]),
-        11 => draw_profile_tab(f, app, chunks[2]),
+        5 => draw_nips_tab(f, app, chunks[2]),
+        6 => draw_status_tab(f, app, chunks[2]),
+        7 => draw_keygen_tab(f, app, chunks[2]),
         _ => {}
     }
 
     draw_status_bar(f, app, chunks[3]);
 
     if app.show_help {
-        draw_help_popup(f, area, app.tab);
+        draw_help_popup(f, area, app.tab, app.nip_tab);
     }
 
     if app.modal.is_some() {
@@ -3060,6 +3062,52 @@ pub fn draw_relay_tab(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// Container tab that renders the NIP sub-tab bar and dispatches to the
+/// individual NIP draw functions based on `app.nip_tab`.
+pub fn draw_nips_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    // Split: top 3 rows = sub-tab bar, rest = NIP content.
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(area);
+
+    // Draw the secondary tab bar.
+    let nip_titles: Vec<Line> = NIP_TAB_NAMES
+        .iter()
+        .map(|&t| Line::from(t))
+        .collect();
+    let sub_tabs = Tabs::new(nip_titles)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" NIPs  [ / ] navigate ")
+                .style(Style::default().bg(Color::Rgb(16, 32, 16))),
+        )
+        .select(app.nip_tab)
+        .style(
+            Style::default()
+                .fg(COLOR_DIM)
+                .bg(Color::Rgb(16, 32, 16)),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Green)
+                .bg(Color::Rgb(16, 32, 16))
+                .add_modifier(Modifier::BOLD),
+        );
+    f.render_widget(sub_tabs, split[0]);
+
+    // Dispatch to the selected NIP tab draw function.
+    match app.nip_tab {
+        0 => draw_nip65_tab(f, app, split[1]),
+        1 => draw_nip96_tab(f, app, split[1]),
+        2 => draw_nip34_tab(f, app, split[1]),
+        3 => draw_nipb7_tab(f, app, split[1]),
+        4 => draw_profile_tab(f, app, split[1]),
+        _ => {}
+    }
+}
+
 pub fn draw_nip65_tab(f: &mut Frame, app: &App, area: Rect) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -3679,13 +3727,15 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             2 => " i:edit  Enter:add/start  x:remove-last  Tab:next  ?:help  q:quit",
             3 => " r:refresh  Tab:next  ?:help  q:quit",
             4 => " r:refresh  Tab:next  ?:help  q:quit",
-            5 => " a:add  d:delete  m:marker  R:relay  P:publish  Tab:next  ?:help  q:quit",
+            5 => match app.nip_tab {
+                0 => " a:add  d:delete  m:marker  R:relay  P:publish  [ ]:switch-nip  Tab  ?  q",
+                1 => " r:refresh  [ ]:switch-nip  Tab  ?  q",
+                2 => " r:edit-relay  c:connect  ↑↓:scroll  [ ]:switch-nip  Tab  ?  q",
+                3 => " a:add  d:delete  R:relay  P:publish  [ ]:switch-nip  Tab  ?  q",
+                _ => " ↑↓:navigate  e:edit  r:relay  P:publish-kind0  [ ]:switch-nip  Tab  ?  q",
+            },
             6 => " r:refresh  Tab:next  ?:help  q:quit",
-            7 => " r:edit-relay  c:connect  ↑↓:scroll  Tab:next  ?:help  q:quit",
-            8 => " a:add  d:delete  R:relay  P:publish  Tab:next  ?:help  q:quit",
-            9 => " r:refresh  Tab:next  ?:help  q:quit",
-            10 => " g:generate  1:copy-hex  2:copy-nsec  3:copy-pubkey-hex  4:copy-npub  Tab:next  ?:help  q:quit",
-            11 => " 1-6:select  e:edit  r:relay  P:publish-kind0  Tab:next  ?:help  q:quit",
+            7 => " g:generate  1:hex  2:nsec  3:pubkey  4:npub  Tab:next  ?:help  q:quit",
             _ => " Tab:next  ?:help  q:quit",
         };
         Line::from(Span::styled(
@@ -3880,7 +3930,7 @@ pub fn draw_profile_tab(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
+pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize, nip_tab: usize) {
     let key = Style::default().fg(Color::Yellow);
     let heading = Style::default()
         .fg(COLOR_ACCENT)
@@ -3899,7 +3949,7 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled("  Global", heading)),
         Line::from(""),
-        kv("  Tab / Shift+Tab  ", "Switch tabs"),
+        kv("  Tab / Shift+Tab  ", "Switch main tabs"),
         kv("  q / Ctrl+C       ", "Quit"),
         kv("  ?                ", "Toggle this help"),
     ];
@@ -4010,54 +4060,68 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
             " Relay ",
             vec![kv("  r                ", "Refresh relay policy")],
         ),
-        // NIP-65
-        5 => (
-            " NIP-65 Relay List ",
-            vec![
-                kv("  a                ", "Add new relay URL"),
-                kv("  d / Delete       ", "Remove selected relay"),
-                kv("  m                ", "Cycle marker (both/read/write)"),
-                kv("  R                ", "Set publish relay URL"),
-                kv("  P                ", "Publish kind:10002 relay list"),
-                kv("  ↑ / ↓            ", "Move selection"),
-            ],
-        ),
-        // NIP-96
-        6 => (
-            " NIP-96 ",
-            vec![kv(
-                "  r                ",
-                "Refresh NIP-96 server info + files",
-            )],
-        ),
-        // NIP-34
-        7 => (
-            " NIP-34 ",
-            vec![
-                kv("  r                ", "Edit relay URL"),
-                kv("  c                ", "Connect and subscribe"),
-                kv("  ↑ / k            ", "Scroll event list up"),
-                kv("  ↓ / j            ", "Scroll event list down"),
-            ],
-        ),
-        // NIP-B7 Blossom Server List
-        8 => (
-            " NIP-B7 Server List ",
-            vec![
-                kv("  a                ", "Add server URL"),
-                kv("  d / Delete       ", "Remove selected server"),
-                kv("  R                ", "Set publish relay URL"),
-                kv("  P                ", "Publish kind:10063 server list"),
-                kv("  ↑ / ↓            ", "Move selection"),
-            ],
-        ),
+        // NIPs container — show sub-tab-specific help
+        5 => match nip_tab {
+            0 => (
+                " NIPs › NIP-65 Relay List ",
+                vec![
+                    kv("  [ / ]            ", "Switch NIP sub-tab"),
+                    kv("  a                ", "Add new relay URL"),
+                    kv("  d / Delete       ", "Remove selected relay"),
+                    kv("  m                ", "Cycle marker (both/read/write)"),
+                    kv("  R                ", "Set publish relay URL"),
+                    kv("  P                ", "Publish kind:10002 relay list"),
+                    kv("  ↑ / ↓            ", "Move selection"),
+                ],
+            ),
+            1 => (
+                " NIPs › NIP-96 ",
+                vec![
+                    kv("  [ / ]            ", "Switch NIP sub-tab"),
+                    kv("  r                ", "Refresh NIP-96 server info"),
+                ],
+            ),
+            2 => (
+                " NIPs › NIP-34 ",
+                vec![
+                    kv("  [ / ]            ", "Switch NIP sub-tab"),
+                    kv("  r                ", "Edit relay URL"),
+                    kv("  c                ", "Connect and subscribe"),
+                    kv("  ↑ / k            ", "Scroll event list up"),
+                    kv("  ↓ / j            ", "Scroll event list down"),
+                ],
+            ),
+            3 => (
+                " NIPs › NIP-B7 Server List ",
+                vec![
+                    kv("  [ / ]            ", "Switch NIP sub-tab"),
+                    kv("  a                ", "Add server URL"),
+                    kv("  d / Delete       ", "Remove selected server"),
+                    kv("  R                ", "Set publish relay URL"),
+                    kv("  P                ", "Publish kind:10063 server list"),
+                    kv("  ↑ / ↓            ", "Move selection"),
+                ],
+            ),
+            _ => (
+                " NIPs › Profile (NIP-01) ",
+                vec![
+                    kv("  [ / ]            ", "Switch NIP sub-tab"),
+                    kv("  ↑ / ↓            ", "Navigate fields"),
+                    kv("  1-6              ", "Jump to field"),
+                    kv("  e / Enter        ", "Edit selected field"),
+                    kv("  r                ", "Set Nostr relay URL"),
+                    kv("  P                ", "Publish kind:0 metadata event"),
+                    kv("  Esc              ", "Stop editing current field"),
+                ],
+            ),
+        },
         // Status
-        9 => (
+        6 => (
             " Status ",
             vec![kv("  r                ", "Refresh server status")],
         ),
         // Keygen
-        10 => (
+        7 => (
             " Keygen ",
             vec![
                 kv("  g                ", "Generate new BIP-340 keypair"),
@@ -4065,16 +4129,6 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  2                ", "Copy nsec (NIP-19 bech32) to clipboard"),
                 kv("  3                ", "Copy public key (hex) to clipboard"),
                 kv("  4                ", "Copy npub (NIP-19 bech32) to clipboard"),
-            ],
-        ),
-        11 => (
-            " Profile (NIP-01) ",
-            vec![
-                kv("  1-6              ", "Select field to edit"),
-                kv("  e / Enter        ", "Edit selected field"),
-                kv("  r                ", "Set Nostr relay URL"),
-                kv("  P                ", "Publish kind:0 metadata event"),
-                kv("  Esc              ", "Stop editing current field"),
             ],
         ),
         _ => ("", vec![]),

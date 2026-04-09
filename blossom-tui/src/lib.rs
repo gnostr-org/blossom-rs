@@ -3320,7 +3320,23 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  Enter            ", "Enter dir / accept file"),
                 kv("  Backspace / h / -", "Go to parent directory"),
                 kv("  Esc              ", "Go up (close at root)"),
+                kv("  g                ", "Open git panel (on git repos)"),
                 kv("  f                ", "Close file browser"),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Git panel (g on repo entry)",
+                    Style::default().fg(COLOR_DIM),
+                )),
+                kv("  s                ", "git status"),
+                kv("  l                ", "git log --oneline -20"),
+                kv("  d                ", "git diff"),
+                kv("  f                ", "git fetch --all"),
+                kv("  p                ", "git pull"),
+                kv("  P                ", "git push"),
+                kv("  a                ", "git add -A"),
+                kv("  c                ", "git commit (enter message)"),
+                kv("  ↑ / k  ↓ / j     ", "Scroll output"),
+                kv("  Esc / q          ", "Close git panel"),
             ],
         ),
         // Batch
@@ -3347,7 +3363,18 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                     "Go to parent directory",
                 ),
                 kv("  Esc              ", "Go up (close at root)"),
+                kv("  g                ", "Open git panel (on git repos)"),
                 kv("  f                ", "Close file browser"),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Git panel (g on repo entry)",
+                    Style::default().fg(COLOR_DIM),
+                )),
+                kv("  s / l / d / f    ", "status / log / diff / fetch"),
+                kv("  p / P            ", "pull / push"),
+                kv("  a / c            ", "add -A / commit"),
+                kv("  ↑ / k  ↓ / j     ", "Scroll output"),
+                kv("  Esc / q          ", "Close git panel"),
             ],
         ),
         // Admin
@@ -3566,6 +3593,24 @@ pub async fn run_loop(
                     continue;
                 }
 
+                if app.git_commit_edit {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.git_commit_edit = false;
+                        }
+                        KeyCode::Enter => {
+                            app.git_commit_edit = false;
+                            app.run_git_action(GitAction::Commit);
+                        }
+                        KeyCode::Backspace => {
+                            app.git_commit_msg.pop();
+                        }
+                        KeyCode::Char(c) => app.git_commit_msg.push(c),
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 if app.batch_input_mode {
                     match key.code {
                         KeyCode::Esc => app.batch_input_mode = false,
@@ -3598,8 +3643,46 @@ pub async fn run_loop(
                         _ => {}
                     },
                     1 => {
-                        // File browser takes priority when active.
-                        if app.filebrowser_active {
+                        // Git panel takes highest priority.
+                        if app.git_mode {
+                            match key.code {
+                                KeyCode::Char('s') => {
+                                    app.run_git_action(GitAction::Status)
+                                }
+                                KeyCode::Char('l') => {
+                                    app.run_git_action(GitAction::Log)
+                                }
+                                KeyCode::Char('d') => {
+                                    app.run_git_action(GitAction::Diff)
+                                }
+                                KeyCode::Char('f') => {
+                                    app.run_git_action(GitAction::Fetch)
+                                }
+                                KeyCode::Char('p') => {
+                                    app.run_git_action(GitAction::Pull)
+                                }
+                                KeyCode::Char('P') => {
+                                    app.run_git_action(GitAction::Push)
+                                }
+                                KeyCode::Char('a') => {
+                                    app.run_git_action(GitAction::Add)
+                                }
+                                KeyCode::Char('c') => {
+                                    app.git_commit_edit = true;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.git_scroll_up()
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.git_scroll_down(20)
+                                }
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.git_mode = false
+                                }
+                                _ => {}
+                            }
+                        // File browser takes next priority when active.
+                        } else if app.filebrowser_active {
                             match key.code {
                                 KeyCode::Up | KeyCode::Char('k') => {
                                     app.filebrowser_scroll_up()
@@ -3612,11 +3695,23 @@ pub async fn run_loop(
                                 | KeyCode::Char('h')
                                 | KeyCode::Char('-')
                                 | KeyCode::Esc => {
-                                    // Esc/Backspace: go up; close at root.
                                     if app.filebrowser_cwd.parent().is_some() {
                                         app.filebrowser_parent();
                                     } else {
                                         app.filebrowser_active = false;
+                                    }
+                                }
+                                KeyCode::Char('g') => {
+                                    let selected_path = app
+                                        .filebrowser_list
+                                        .selected()
+                                        .and_then(|i| {
+                                            app.filebrowser_entries.get(i)
+                                        })
+                                        .filter(|e| e.git.is_some())
+                                        .map(|e| e.path.clone());
+                                    if let Some(path) = selected_path {
+                                        app.git_open(path);
                                     }
                                 }
                                 KeyCode::Char('f') => {
@@ -3626,12 +3721,16 @@ pub async fn run_loop(
                             }
                         } else {
                             match key.code {
-                                KeyCode::Char('f') => app.filebrowser_activate(),
+                                KeyCode::Char('f') => {
+                                    app.filebrowser_activate()
+                                }
                                 KeyCode::Char('i') => app.input_mode = true,
                                 KeyCode::Char('p') => {
                                     app.publish_nip94 = !app.publish_nip94
                                 }
-                                KeyCode::Char('R') => app.publish_relay_edit = true,
+                                KeyCode::Char('R') => {
+                                    app.publish_relay_edit = true
+                                }
                                 KeyCode::Enter => app.start_upload(),
                                 KeyCode::Esc => {
                                     app.upload_path.clear();
@@ -3642,7 +3741,45 @@ pub async fn run_loop(
                         }
                     }
                     2 => {
-                        if app.batch_filebrowser_active {
+                        // Git panel takes highest priority.
+                        if app.git_mode {
+                            match key.code {
+                                KeyCode::Char('s') => {
+                                    app.run_git_action(GitAction::Status)
+                                }
+                                KeyCode::Char('l') => {
+                                    app.run_git_action(GitAction::Log)
+                                }
+                                KeyCode::Char('d') => {
+                                    app.run_git_action(GitAction::Diff)
+                                }
+                                KeyCode::Char('f') => {
+                                    app.run_git_action(GitAction::Fetch)
+                                }
+                                KeyCode::Char('p') => {
+                                    app.run_git_action(GitAction::Pull)
+                                }
+                                KeyCode::Char('P') => {
+                                    app.run_git_action(GitAction::Push)
+                                }
+                                KeyCode::Char('a') => {
+                                    app.run_git_action(GitAction::Add)
+                                }
+                                KeyCode::Char('c') => {
+                                    app.git_commit_edit = true;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.git_scroll_up()
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.git_scroll_down(20)
+                                }
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.git_mode = false
+                                }
+                                _ => {}
+                            }
+                        } else if app.batch_filebrowser_active {
                             match key.code {
                                 KeyCode::Up | KeyCode::Char('k') => {
                                     app.batch_filebrowser_scroll_up()
@@ -3666,6 +3803,20 @@ pub async fn run_loop(
                                     } else {
                                         app.batch_filebrowser_active =
                                             false;
+                                    }
+                                }
+                                KeyCode::Char('g') => {
+                                    let selected_path = app
+                                        .batch_filebrowser_list
+                                        .selected()
+                                        .and_then(|i| {
+                                            app.batch_filebrowser_entries
+                                                .get(i)
+                                        })
+                                        .filter(|e| e.git.is_some())
+                                        .map(|e| e.path.clone());
+                                    if let Some(path) = selected_path {
+                                        app.git_open(path);
                                     }
                                 }
                                 KeyCode::Char('f') => {

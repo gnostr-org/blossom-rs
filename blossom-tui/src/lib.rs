@@ -568,6 +568,8 @@ pub struct App {
 
     // UI state
     pub show_help: bool,
+    pub show_docs: bool,
+    pub docs_scroll: u16,
     pub notification: Option<(String, bool)>, // (message, is_error)
     pub modal: Option<Modal>,
     pub modal_input: String,
@@ -684,6 +686,8 @@ impl App {
             profile_nostr_relay: String::new(),
             profile_relay_edit: false,
             show_help: false,
+            show_docs: false,
+            docs_scroll: 0,
             notification: None,
             modal: None,
             modal_input: String::new(),
@@ -2020,6 +2024,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.show_help {
         draw_help_popup(f, area, app.tab, app.nip_tab);
+    }
+
+    if app.show_docs {
+        draw_docs_fullscreen(f, area, app.tab, app.nip_tab, app.docs_scroll);
     }
 
     if app.modal.is_some() {
@@ -4168,6 +4176,480 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize, nip_tab: usize) {
     f.render_widget(help, popup_area);
 }
 
+// ── Full-screen documentation overlay (\ to open/close)
+// ───────────────────────────────────────────────────────────
+
+pub fn draw_docs_fullscreen(
+    f: &mut Frame,
+    area: Rect,
+    tab: usize,
+    nip_tab: usize,
+    scroll: u16,
+) {
+    let bold = Style::default()
+        .fg(COLOR_ACCENT)
+        .add_modifier(Modifier::BOLD);
+    let heading2 = Style::default()
+        .fg(Color::Rgb(140, 200, 140))
+        .add_modifier(Modifier::BOLD);
+    let key = Style::default().fg(Color::Yellow);
+    let dim = Style::default().fg(COLOR_DIM);
+    let note = Style::default().fg(Color::Rgb(140, 140, 180));
+    let url_style = Style::default().fg(Color::Rgb(100, 180, 255));
+
+    let kv = |k: &'static str, v: &'static str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(format!("  {k:<22}", k = k), key),
+            Span::styled(v, Style::default()),
+        ])
+    };
+    let h1 = |s: &'static str| -> Line<'static> { Line::from(Span::styled(s, bold)) };
+    let h2 = |s: &'static str| -> Line<'static> { Line::from(Span::styled(s, heading2)) };
+    let blank = || -> Line<'static> { Line::from("") };
+    let note_ln = |s: &'static str| -> Line<'static> { Line::from(Span::styled(s, note)) };
+    let url_ln = |s: &'static str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled("  → ", dim),
+            Span::styled(s, url_style),
+        ])
+    };
+
+    // ── Global section (always shown at top) ──────────────────
+    let mut lines: Vec<Line> = vec![
+        h1("  ╔══════════════════════════════════════════════════════════╗"),
+        h1("  ║           blossom-tui  Documentation                    ║"),
+        h1("  ╚══════════════════════════════════════════════════════════╝"),
+        blank(),
+        h2("  GLOBAL KEYS"),
+        blank(),
+        kv("Tab / Shift+Tab", "Cycle main tabs left/right"),
+        kv("[ / ]", "Cycle NIP sub-tabs (when in NIPs tab)"),
+        kv("?", "Toggle compact help popup"),
+        kv("\\", "Toggle this full-screen documentation"),
+        kv("q / Ctrl+C", "Quit blossom-tui"),
+        blank(),
+        note_ln("  Scroll this page: ↑/↓/j/k · PgUp/PgDn · g=top G=bottom"),
+        blank(),
+    ];
+
+    // ── Tab-specific section ──────────────────────────────────
+    let tab_docs: Vec<Line> = match tab {
+        // Blobs
+        0 => vec![
+            h2("  BLOBS TAB"),
+            blank(),
+            note_ln("  Lists all blobs stored on the configured Blossom server."),
+            note_ln("  Blobs are content-addressed by SHA-256 hash (BUD-01)."),
+            blank(),
+            h2("  Navigation"),
+            kv("↑ / k", "Move selection up"),
+            kv("↓ / j", "Move selection down"),
+            blank(),
+            h2("  Actions"),
+            kv("r", "Refresh blob list from server"),
+            kv("d", "Delete selected blob (requires auth)"),
+            kv("o", "Download selected blob to disk"),
+            kv("m", "Mirror blob from a remote URL (BUD-04)"),
+            kv("s", "Cycle sort: Date → Size → Hash → Type"),
+            kv("/", "Filter blobs  (Enter to confirm, Esc to clear)"),
+            kv("y", "Copy SHA-256 of selected blob to clipboard"),
+            kv("u", "Copy download URL to clipboard"),
+            kv("Enter", "Open selected blob in system default app"),
+            blank(),
+            h2("  Protocol Reference"),
+            note_ln("  BUD-01  Core blob upload/download/delete"),
+            url_ln("https://github.com/hzrd149/blossom/blob/master/buds/01.md"),
+            note_ln("  BUD-02  List blobs by pubkey"),
+            url_ln("https://github.com/hzrd149/blossom/blob/master/buds/02.md"),
+            note_ln("  BUD-04  Mirror from remote URL"),
+            url_ln("https://github.com/hzrd149/blossom/blob/master/buds/04.md"),
+            blank(),
+            h2("  Auth"),
+            note_ln("  All mutating requests (delete, upload) require a valid"),
+            note_ln("  Nostr kind:24242 event signed with your BIP-340 key."),
+            note_ln("  Set your secret key via --key flag or keygen tab."),
+        ],
+        // Upload
+        1 => vec![
+            h2("  UPLOAD TAB"),
+            blank(),
+            note_ln("  Upload individual files to the Blossom server."),
+            note_ln("  Files are hashed with SHA-256 before upload."),
+            note_ln("  Duplicate blobs are deduplicated server-side."),
+            blank(),
+            h2("  File input"),
+            kv("i", "Enter file-path edit mode (type path manually)"),
+            kv("f", "Open file browser tree"),
+            kv("Enter", "Start upload"),
+            kv("Esc", "Exit edit mode / clear path"),
+            blank(),
+            h2("  Options"),
+            kv("p", "Toggle NIP-94 metadata publish after upload"),
+            kv("R", "Edit relay URL for NIP-94 publish"),
+            blank(),
+            h2("  File Browser"),
+            note_ln("  Navigates your local filesystem."),
+            note_ln("  Git repos show a  icon; bare repos show a  icon."),
+            kv("↑ / k", "Move up"),
+            kv("↓ / j", "Move down"),
+            kv("Enter", "Enter directory / select file"),
+            kv("Backspace / h / -", "Go to parent directory"),
+            kv("Esc", "Go up one level (closes at root)"),
+            kv("/", "Fuzzy search entries in current directory"),
+            kv("Esc (in search)", "Clear search / exit search mode"),
+            kv("f", "Close file browser"),
+            blank(),
+            h2("  Git Panel (auto-opens inside git repos)"),
+            note_ln("  Appears automatically when file browser enters a git repo."),
+            kv("s", "git status"),
+            kv("l", "git log --oneline -20"),
+            kv("d", "git diff"),
+            kv("f", "git fetch --all"),
+            kv("p", "git pull"),
+            kv("P", "git push"),
+            kv("a", "git add -A"),
+            kv("c", "git commit  (opens modal for message)"),
+            kv("↑/k  ↓/j", "Scroll git output"),
+            kv("Esc / q", "Close git panel"),
+            blank(),
+            h2("  Protocol Reference"),
+            note_ln("  BUD-01  Upload endpoint  PUT /<sha256>"),
+            url_ln("https://github.com/hzrd149/blossom/blob/master/buds/01.md"),
+            note_ln("  BUD-06  Upload requirements advertisement"),
+            url_ln("https://github.com/hzrd149/blossom/blob/master/buds/06.md"),
+            note_ln("  NIP-94  File metadata (kind:1063)"),
+            url_ln("https://github.com/nostr-protocol/nips/blob/master/94.md"),
+        ],
+        // Batch
+        2 => vec![
+            h2("  BATCH TAB"),
+            blank(),
+            note_ln("  Upload multiple files in one operation."),
+            note_ln("  Add files via the browser or by typing paths."),
+            blank(),
+            h2("  Queue management"),
+            kv("i", "Type a file path and add to queue"),
+            kv("f", "Open file browser to pick files"),
+            kv("x", "Remove last queued item"),
+            kv("Enter", "Start batch upload of all queued files"),
+            blank(),
+            h2("  File Browser (same as Upload tab)"),
+            kv("↑ / k  ↓ / j", "Navigate"),
+            kv("Enter", "Enter dir or add file to queue"),
+            kv("Backspace / h / -", "Parent directory"),
+            kv("Esc", "Go up / close"),
+            kv("/", "Fuzzy search"),
+            kv("g", "Open git panel"),
+            kv("f", "Close browser"),
+            blank(),
+            h2("  Git Panel (same keys as Upload tab)"),
+            kv("s/l/d/f", "status / log / diff / fetch"),
+            kv("p / P", "pull / push"),
+            kv("a / c", "add -A / commit"),
+            kv("↑/k  ↓/j", "Scroll"),
+            kv("Esc / q", "Close"),
+        ],
+        // Admin
+        3 => vec![
+            h2("  ADMIN TAB"),
+            blank(),
+            note_ln("  Server administration (requires --enable-admin on server)."),
+            note_ln("  Shows storage stats, user quotas, and blob inventory."),
+            blank(),
+            h2("  Keys"),
+            kv("r", "Refresh admin stats and user list"),
+            blank(),
+            h2("  Server admin endpoints"),
+            note_ln("  GET  /admin/blobs       — list all blobs"),
+            note_ln("  GET  /admin/users       — list users and quotas"),
+            note_ln("  GET  /admin/stats       — storage statistics"),
+            note_ln("  DELETE /admin/blobs/:sha — force-delete any blob"),
+        ],
+        // Relay
+        4 => vec![
+            h2("  RELAY TAB"),
+            blank(),
+            note_ln("  Shows the Blossom server's upload / download policy."),
+            note_ln("  Policy is fetched from GET /policy  (BUD-06)."),
+            blank(),
+            h2("  Keys"),
+            kv("r", "Refresh relay policy from server"),
+            blank(),
+            h2("  Protocol Reference"),
+            note_ln("  BUD-06  Upload requirements and server policy"),
+            url_ln("https://github.com/hzrd149/blossom/blob/master/buds/06.md"),
+        ],
+        // NIPs container
+        5 => match nip_tab {
+            // NIP-65
+            0 => vec![
+                h2("  NIPs › NIP-65  Relay List Metadata"),
+                blank(),
+                note_ln("  Manage your Nostr relay list (kind:10002)."),
+                note_ln("  Each relay has a marker: read / write / both."),
+                note_ln("  Publish the list to any relay; clients use it to"),
+                note_ln("  decide where to send and receive your events."),
+                blank(),
+                h2("  Keys"),
+                kv("[ / ]", "Switch NIP sub-tab"),
+                kv("↑ / ↓", "Move relay selection"),
+                kv("a", "Add a new relay URL"),
+                kv("d / Delete", "Remove selected relay"),
+                kv("m", "Cycle marker: both → read → write → both"),
+                kv("R", "Set publish relay URL"),
+                kv("P", "Sign and publish kind:10002 event"),
+                blank(),
+                h2("  Event format  (kind:10002)"),
+                note_ln("  {"),
+                note_ln("    \"kind\": 10002,"),
+                note_ln("    \"tags\": ["),
+                note_ln("      [\"r\", \"wss://relay.example.com\"],"),
+                note_ln("      [\"r\", \"wss://inbox.example.com\", \"read\"],"),
+                note_ln("      [\"r\", \"wss://out.example.com\",  \"write\"]"),
+                note_ln("    ]"),
+                note_ln("  }"),
+                blank(),
+                h2("  Protocol Reference"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/65.md"),
+            ],
+            // NIP-96
+            1 => vec![
+                h2("  NIPs › NIP-96  HTTP File Storage Integration"),
+                blank(),
+                note_ln("  NIP-96 defines a standard HTTP API for Nostr file storage."),
+                note_ln("  Servers expose a /.well-known/nostr/upload info document."),
+                note_ln("  Clients upload with multipart/form-data and receive"),
+                note_ln("  a kind:1063 (File Metadata) event in response."),
+                blank(),
+                h2("  Keys"),
+                kv("[ / ]", "Switch NIP sub-tab"),
+                kv("r", "Refresh server info from /.well-known/nostr/upload"),
+                blank(),
+                h2("  Server info fields"),
+                note_ln("  api_url          — upload endpoint"),
+                note_ln("  download_url     — CDN prefix for blobs"),
+                note_ln("  supported_nips   — list of implemented NIPs"),
+                note_ln("  content_types    — allowed MIME types"),
+                note_ln("  max_byte_size    — upload size limit"),
+                note_ln("  plans            — storage plans (free/paid)"),
+                blank(),
+                h2("  Auth"),
+                note_ln("  NIP-98 HTTP Auth: kind:27235 event in Authorization header"),
+                note_ln("  Base64-encoded signed event proves identity without a password."),
+                blank(),
+                h2("  Protocol References"),
+                note_ln("  NIP-96  HTTP File Storage"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/96.md"),
+                note_ln("  NIP-94  File Metadata (kind:1063)"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/94.md"),
+                note_ln("  NIP-98  HTTP Auth (kind:27235)"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/98.md"),
+            ],
+            // NIP-34
+            2 => vec![
+                h2("  NIPs › NIP-34  Git Stuff"),
+                blank(),
+                note_ln("  NIP-34 defines Nostr events for git repositories."),
+                note_ln("  Repositories, patches, and issues live as Nostr events."),
+                note_ln("  Enables decentralised code collaboration over relays."),
+                blank(),
+                h2("  Event kinds"),
+                kv("kind:30617", "Repository announcement"),
+                kv("kind:30618", "Repository state (HEAD, refs)"),
+                kv("kind:1621", "Issue"),
+                kv("kind:1622", "Issue reply"),
+                kv("kind:1623", "Issue status change"),
+                kv("kind:1617", "Patch"),
+                kv("kind:1618", "Patch revision"),
+                blank(),
+                h2("  Repository announcement tags"),
+                note_ln("  [\"d\", \"<repo-id>\"]          unique repo identifier"),
+                note_ln("  [\"name\", \"my-project\"]      human name"),
+                note_ln("  [\"description\", \"...\"]      short description"),
+                note_ln("  [\"clone\", \"https://...\"]    HTTP clone URL"),
+                note_ln("  [\"clone\", \"git@...\"]        SSH clone URL"),
+                note_ln("  [\"web\", \"https://...\"]      web viewer"),
+                note_ln("  [\"r\", \"wss://relay.example.com\"]  preferred relay"),
+                blank(),
+                h2("  Keys"),
+                kv("[ / ]", "Switch NIP sub-tab"),
+                kv("r", "Edit relay URL"),
+                kv("c", "Connect and subscribe to relay"),
+                kv("↑ / k  ↓ / j", "Scroll event list"),
+                blank(),
+                h2("  Protocol Reference"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/34.md"),
+            ],
+            // NIP-B7
+            3 => vec![
+                h2("  NIPs › NIP-B7  Blossom Drive / Server List"),
+                blank(),
+                note_ln("  NIP-B7 (kind:10063) stores your list of preferred Blossom"),
+                note_ln("  servers. Clients use this to know where to upload blobs"),
+                note_ln("  and where to look for blobs you have published."),
+                blank(),
+                h2("  Keys"),
+                kv("[ / ]", "Switch NIP sub-tab"),
+                kv("↑ / ↓", "Move selection"),
+                kv("a", "Add a server URL"),
+                kv("d / Delete", "Remove selected server"),
+                kv("R", "Set publish relay URL"),
+                kv("P", "Sign and publish kind:10063 server list"),
+                blank(),
+                h2("  Event format  (kind:10063)"),
+                note_ln("  {"),
+                note_ln("    \"kind\": 10063,"),
+                note_ln("    \"tags\": ["),
+                note_ln("      [\"server\", \"https://blossom.example.com\"],"),
+                note_ln("      [\"server\", \"https://cdn.example.org\"]"),
+                note_ln("    ]"),
+                note_ln("  }"),
+                blank(),
+                h2("  Protocol Reference"),
+                note_ln("  Blossom BUD-03 / NIP-B7 draft"),
+                url_ln("https://github.com/hzrd149/blossom/blob/master/buds/03.md"),
+            ],
+            // Profile (NIP-01)
+            _ => vec![
+                h2("  NIPs › Profile  (NIP-01 kind:0 Metadata)"),
+                blank(),
+                note_ln("  Edit and publish your Nostr profile metadata."),
+                note_ln("  Profile is a replaceable kind:0 event containing JSON."),
+                note_ln("  Published to your configured relay."),
+                blank(),
+                h2("  Fields"),
+                kv("1  name", "Short username / handle"),
+                kv("2  display_name", "Full display name"),
+                kv("3  about", "Bio / description"),
+                kv("4  picture", "Avatar URL (https://...)"),
+                kv("5  banner", "Banner image URL"),
+                kv("6  nip05", "NIP-05 identifier  user@domain.com"),
+                blank(),
+                h2("  Navigation"),
+                kv("↑ / ↓", "Move between fields"),
+                kv("1-6", "Jump directly to a field"),
+                kv("e / Enter", "Edit the selected field"),
+                kv("Esc", "Stop editing, keep value"),
+                kv("r", "Set relay URL for fetch/publish"),
+                kv("F", "Fetch kind:0 from relay (not yet wired)"),
+                kv("P", "Sign and publish kind:0 to relay"),
+                kv("[ / ]", "Switch NIP sub-tab"),
+                blank(),
+                h2("  Event format  (kind:0)"),
+                note_ln("  {"),
+                note_ln("    \"kind\": 0,"),
+                note_ln("    \"content\": \"{\\\"name\\\":\\\"alice\\\","),
+                note_ln("                  \\\"about\\\":\\\"nostr dev\\\","),
+                note_ln("                  \\\"picture\\\":\\\"https://...\\\"}\","),
+                note_ln("    \"tags\": []"),
+                note_ln("  }"),
+                blank(),
+                h2("  Protocol Reference"),
+                note_ln("  NIP-01  Basic protocol (kind:0 metadata)"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/01.md"),
+                note_ln("  NIP-05  Mapping Nostr keys to DNS identifiers"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/05.md"),
+                note_ln("  NIP-19  bech32-encoded entities (npub/nsec/note)"),
+                url_ln("https://github.com/nostr-protocol/nips/blob/master/19.md"),
+            ],
+        },
+        // Status
+        6 => vec![
+            h2("  STATUS TAB"),
+            blank(),
+            note_ln("  Shows live server health information."),
+            note_ln("  Fetches from GET /status on the configured Blossom server."),
+            blank(),
+            h2("  Keys"),
+            kv("r", "Refresh server status"),
+            blank(),
+            h2("  Displayed fields"),
+            note_ln("  Server URL     — the configured endpoint"),
+            note_ln("  Version        — server binary version"),
+            note_ln("  Blob count     — total blobs stored"),
+            note_ln("  Storage used   — bytes stored"),
+            note_ln("  Uptime         — seconds since last restart"),
+        ],
+        // Keygen
+        7 => vec![
+            h2("  KEYGEN TAB"),
+            blank(),
+            note_ln("  Generate BIP-340 Schnorr keypairs for Nostr."),
+            note_ln("  Keys are generated locally — never sent to any server."),
+            note_ln("  Copy and store your secret key in a safe place."),
+            blank(),
+            h2("  Keys"),
+            kv("g", "Generate a new random keypair"),
+            kv("1", "Copy secret key (hex) to clipboard"),
+            kv("2", "Copy nsec (NIP-19 bech32) to clipboard"),
+            kv("3", "Copy public key (hex) to clipboard"),
+            kv("4", "Copy npub (NIP-19 bech32) to clipboard"),
+            blank(),
+            h2("  Key formats"),
+            note_ln("  hex secret key  — 64 hex chars, raw BIP-340 scalar"),
+            note_ln("  nsec            — NIP-19 bech32, human-friendly secret"),
+            note_ln("  hex public key  — 64 hex chars, secp256k1 x-only pubkey"),
+            note_ln("  npub            — NIP-19 bech32, shareable identity"),
+            blank(),
+            h2("  Protocol References"),
+            note_ln("  BIP-340  Schnorr signatures on secp256k1"),
+            url_ln("https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki"),
+            note_ln("  NIP-19  bech32-encoded entities"),
+            url_ln("https://github.com/nostr-protocol/nips/blob/master/19.md"),
+        ],
+        _ => vec![],
+    };
+
+    lines.extend(tab_docs);
+
+    // Footer
+    lines.push(blank());
+    lines.push(Line::from(Span::styled(
+        "  ─────────────────────────────────────────────────────────",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  \\ or q or Esc to close  │  ↑/↓/PgUp/PgDn to scroll",
+        dim,
+    )));
+
+    // Clamp scroll so we never go past end
+    let total = lines.len() as u16;
+    let visible = area.height.saturating_sub(2);
+    let max_scroll = total.saturating_sub(visible);
+    let scroll = scroll.min(max_scroll);
+
+    f.render_widget(Clear, area);
+    let title = match tab {
+        5 => format!(
+            " blossom-tui docs — {} ",
+            ["NIPs › NIP-65", "NIPs › NIP-96", "NIPs › NIP-34",
+             "NIPs › NIP-B7", "NIPs › Profile"]
+            .get(nip_tab)
+            .copied()
+            .unwrap_or("NIPs")
+        ),
+        t => format!(
+            " blossom-tui docs — {} ",
+            ["Blobs", "Upload", "Batch", "Admin", "Relay",
+             "NIPs", "Status", "Keygen"]
+            .get(t)
+            .copied()
+            .unwrap_or("?")
+        ),
+    };
+    let doc = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(COLOR_ACCENT))
+                .style(Style::default().bg(Color::Rgb(10, 10, 20))),
+        )
+        .scroll((scroll, 0));
+    f.render_widget(doc, area);
+}
+
 // ── Main event loop
 // ───────────────────────────────────────────────────────────
 
@@ -4239,7 +4721,44 @@ pub async fn run_loop(
 
                 if !app.input_mode && key.code == KeyCode::Char('?') {
                     app.show_help = !app.show_help;
+                    app.show_docs = false;
                     app.notification = None;
+                    continue;
+                }
+
+                if !app.input_mode && key.code == KeyCode::Char('\\') {
+                    app.show_docs = !app.show_docs;
+                    app.docs_scroll = 0;
+                    app.show_help = false;
+                    app.notification = None;
+                    continue;
+                }
+
+                if app.show_docs {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('\\') => {
+                            app.show_docs = false;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.docs_scroll = app.docs_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.docs_scroll = app.docs_scroll.saturating_add(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.docs_scroll = app.docs_scroll.saturating_sub(20);
+                        }
+                        KeyCode::PageDown => {
+                            app.docs_scroll = app.docs_scroll.saturating_add(20);
+                        }
+                        KeyCode::Home | KeyCode::Char('g') => {
+                            app.docs_scroll = 0;
+                        }
+                        KeyCode::End | KeyCode::Char('G') => {
+                            app.docs_scroll = u16::MAX;
+                        }
+                        _ => {}
+                    }
                     continue;
                 }
 

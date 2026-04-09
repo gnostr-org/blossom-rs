@@ -751,6 +751,33 @@ impl App {
         self.blobs_table.select(Some(0));
     }
 
+    /// Open the selected blob's URL in the system default application.
+    pub fn open_selected_blob(&mut self) {
+        let Some(idx) = self.blobs_table.selected() else {
+            return;
+        };
+        let visible = self.visible_blobs();
+        let Some(blob) = visible.get(idx) else {
+            return;
+        };
+        let url = match &blob.url {
+            Some(u) => u.clone(),
+            None => {
+                // Fall back to constructing the URL from server + sha256.
+                format!(
+                    "{}/{}",
+                    self.server.trim_end_matches('/'),
+                    blob.sha256
+                )
+            }
+        };
+        drop(visible);
+        match open::that(&url) {
+            Ok(()) => self.notification = Some((format!("Opened: {url}"), false)),
+            Err(e) => self.notification = Some((format!("Open failed: {e}"), true)),
+        }
+    }
+
     /// Copy the full SHA-256 of the selected blob to the system clipboard.
     pub fn copy_selected_sha256(&mut self) {
         let Some(idx) = self.blobs_table.selected() else {
@@ -2323,7 +2350,7 @@ pub fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         ))
     } else {
         let hints = match app.tab {
-            0 => " r:refresh  d:delete  o:download  m:mirror  s:sort  /:filter  y:copy-sha  u:copy-url  ↑↓/jk  Tab  ?  q",
+            0 => " r:refresh  d:delete  o:download  m:mirror  s:sort  /:filter  y:copy-sha  u:copy-url  Enter:open  ↑↓/jk  Tab  ?  q",
             1 => {
                 " i:edit-path  p:toggle-nip94  R:relay-url  Enter:upload  Esc:clear  Tab:next  ?:help  q:quit"
             }
@@ -2450,6 +2477,7 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, tab: usize) {
                 kv("  /                ", "Filter (Enter confirm, Esc clear)"),
                 kv("  y                ", "Copy SHA-256 to clipboard"),
                 kv("  u                ", "Copy URL to clipboard"),
+                kv("  Enter            ", "Open in system default app"),
             ],
         ),
         // Upload
@@ -2716,6 +2744,7 @@ pub async fn run_loop(
                         KeyCode::Char('/') => app.enter_filter_mode(),
                         KeyCode::Char('y') => app.copy_selected_sha256(),
                         KeyCode::Char('u') => app.copy_selected_url(),
+                        KeyCode::Enter => app.open_selected_blob(),
                         _ => {}
                     },
                     1 => match key.code {

@@ -276,6 +276,12 @@ pub struct App {
     pub batch_input_mode: bool,
     pub batch_running: bool,
 
+    // File browser (batch tab) — independent from upload tab browser
+    pub batch_filebrowser_cwd: PathBuf,
+    pub batch_filebrowser_entries: Vec<FileBrowserEntry>,
+    pub batch_filebrowser_list: ListState,
+    pub batch_filebrowser_active: bool,
+
     // Admin tab
     pub admin_stats: Option<serde_json::Value>,
     pub admin_stats_loading: bool,
@@ -361,6 +367,11 @@ impl App {
             batch_input: String::new(),
             batch_input_mode: false,
             batch_running: false,
+            batch_filebrowser_cwd: std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/")),
+            batch_filebrowser_entries: Vec::new(),
+            batch_filebrowser_list: ListState::default(),
+            batch_filebrowser_active: false,
             admin_stats: None,
             admin_stats_loading: false,
             admin_stats_error: None,
@@ -753,6 +764,112 @@ impl App {
             self.filebrowser_load();
         } else {
             self.filebrowser_sync_path();
+        }
+    }
+
+    // ── Batch file browser methods ────────────────────────────────────────────
+
+    pub fn batch_filebrowser_load(&mut self) {
+        let mut dirs: Vec<FileBrowserEntry> = Vec::new();
+        let mut files: Vec<FileBrowserEntry> = Vec::new();
+
+        if let Ok(rd) = std::fs::read_dir(&self.batch_filebrowser_cwd) {
+            for entry in rd.flatten() {
+                let e = FileBrowserEntry::new(entry.path());
+                if e.is_dir {
+                    dirs.push(e);
+                } else {
+                    files.push(e);
+                }
+            }
+        }
+
+        dirs.sort_by(|a, b| {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+        });
+        files.sort_by(|a, b| {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+        });
+
+        self.batch_filebrowser_entries =
+            dirs.into_iter().chain(files).collect();
+
+        let sel = self
+            .batch_filebrowser_list
+            .selected()
+            .unwrap_or(0)
+            .min(self.batch_filebrowser_entries.len().saturating_sub(1));
+        self.batch_filebrowser_list
+            .select(if self.batch_filebrowser_entries.is_empty() {
+                None
+            } else {
+                Some(sel)
+            });
+        self.batch_filebrowser_sync_path();
+    }
+
+    fn batch_filebrowser_sync_path(&mut self) {
+        if let Some(idx) = self.batch_filebrowser_list.selected() {
+            if let Some(entry) = self.batch_filebrowser_entries.get(idx) {
+                self.batch_input =
+                    entry.path.to_string_lossy().into_owned();
+            }
+        }
+    }
+
+    pub fn batch_filebrowser_scroll_up(&mut self) {
+        let i = self.batch_filebrowser_list.selected().unwrap_or(0);
+        if i > 0 {
+            self.batch_filebrowser_list.select(Some(i - 1));
+            self.batch_filebrowser_sync_path();
+        }
+    }
+
+    pub fn batch_filebrowser_scroll_down(&mut self) {
+        let max =
+            self.batch_filebrowser_entries.len().saturating_sub(1);
+        let i = self.batch_filebrowser_list.selected().unwrap_or(0);
+        self.batch_filebrowser_list.select(Some((i + 1).min(max)));
+        self.batch_filebrowser_sync_path();
+    }
+
+    /// Enter a dir, or append a file to the batch queue.
+    pub fn batch_filebrowser_enter(&mut self) {
+        let Some(idx) = self.batch_filebrowser_list.selected() else {
+            return;
+        };
+        let Some(entry) = self.batch_filebrowser_entries.get(idx) else {
+            return;
+        };
+        if entry.is_dir {
+            self.batch_filebrowser_cwd = entry.path.clone();
+            self.batch_filebrowser_list.select(Some(0));
+            self.batch_filebrowser_load();
+        } else {
+            let path = entry.path.to_string_lossy().into_owned();
+            self.batch_input = path;
+            self.add_batch_path();
+        }
+    }
+
+    pub fn batch_filebrowser_parent(&mut self) {
+        if let Some(parent) = self
+            .batch_filebrowser_cwd
+            .parent()
+            .map(|p| p.to_path_buf())
+        {
+            self.batch_filebrowser_cwd = parent;
+            self.batch_filebrowser_list.select(Some(0));
+            self.batch_filebrowser_load();
+        }
+    }
+
+    pub fn batch_filebrowser_activate(&mut self) {
+        self.batch_filebrowser_active = true;
+        if self.batch_filebrowser_entries.is_empty() {
+            self.batch_filebrowser_load();
+        } else {
+            self.batch_filebrowser_sync_path();
         }
     }
 

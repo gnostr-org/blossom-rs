@@ -9,6 +9,8 @@
 //! - **Status** — fetch and display `/status` JSON
 //! - **Keygen** — generate a fresh BIP-340 keypair
 
+pub mod nip19;
+
 use std::{cmp::Reverse, io::Stdout, path::PathBuf, time::Duration};
 
 use blossom_rs::{BlobDescriptor, BlossomClient, BlossomSigner, Signer};
@@ -406,6 +408,7 @@ pub struct KeygenResult {
     pub hex_secret: String,
     pub nsec: String,
     pub pubkey: String,
+    pub npub: String,
 }
 
 pub struct App {
@@ -1213,12 +1216,14 @@ impl App {
     pub fn generate_keypair(&mut self) {
         let signer = Signer::generate();
         let hex_secret = signer.secret_key_hex();
-        let nsec = encode_nsec(&hex_secret).unwrap_or_else(|_| "?".into());
+        let nsec = nip19::seckey_to_nsec(&hex_secret).unwrap_or_else(|_| "?".into());
         let pubkey = signer.public_key_hex();
+        let npub = nip19::pubkey_to_npub(&pubkey).unwrap_or_else(|_| "?".into());
         self.keygen_data = Some(KeygenResult {
             hex_secret,
             nsec,
             pubkey,
+            npub,
         });
         self.keygen_copied = None;
     }
@@ -1355,7 +1360,8 @@ impl App {
         }
     }
 
-    /// Copy a keygen field to the clipboard. `field`: 1=hex secret, 2=nsec, 3=pubkey.
+    /// Copy a keygen field to the clipboard.
+    /// field: 1=hex secret, 2=nsec, 3=pubkey hex, 4=npub
     pub fn copy_keygen_field(&mut self, field: u8) {
         let Some(kp) = &self.keygen_data else {
             self.notification = Some(("Press g to generate a keypair first.".into(), true));
@@ -1364,7 +1370,8 @@ impl App {
         let (label, value) = match field {
             1 => ("Secret (hex)", kp.hex_secret.clone()),
             2 => ("nsec", kp.nsec.clone()),
-            3 => ("Public key", kp.pubkey.clone()),
+            3 => ("Public key (hex)", kp.pubkey.clone()),
+            4 => ("npub", kp.npub.clone()),
             _ => return,
         };
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(value.clone())) {
@@ -3209,7 +3216,8 @@ pub fn draw_keygen_tab(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(2), // hint
             Constraint::Length(2), // secret hex
             Constraint::Length(2), // nsec
-            Constraint::Length(2), // pubkey
+            Constraint::Length(2), // pubkey hex
+            Constraint::Length(2), // npub
             Constraint::Length(2), // copy hints
             Constraint::Min(0),    // warning / padding
         ])
@@ -3259,25 +3267,35 @@ pub fn draw_keygen_tab(f: &mut Frame, app: &App, area: Rect) {
         );
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("[3] Public key:    ", label),
+                Span::styled("[3] Pubkey  (hex): ", label),
                 Span::styled(kp.pubkey.clone(), val),
                 copied_badge(3),
             ])),
             chunks[3],
         );
         f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("[4] Pubkey  (npub):", label),
+                Span::raw(" "),
+                Span::styled(kp.npub.clone(), val),
+                copied_badge(4),
+            ])),
+            chunks[4],
+        );
+        f.render_widget(
             Paragraph::new(Span::styled(
-                "    Press 1 / 2 / 3 to copy the corresponding value to the clipboard.",
+                "    Press 1 / 2 / 3 / 4 to copy the corresponding value \
+                 to the clipboard.",
                 key_hint,
             )),
-            chunks[4],
+            chunks[5],
         );
         f.render_widget(
             Paragraph::new(Span::styled(
                 "⚠  Keep the secret key safe — it is not stored anywhere.",
                 Style::default().fg(Color::Yellow),
             )),
-            chunks[5],
+            chunks[6],
         );
     }
 }

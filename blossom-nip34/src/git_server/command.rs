@@ -96,7 +96,6 @@ impl<'a> GitCommand<'a> {
         let mut cmd = Command::new(self.git_path);
         cmd.current_dir(self.repo_path);
 
-        // Allow fetching any reachable SHA1
         cmd.arg("-c")
             .arg("uploadpack.allowTipSHA1InWant=true")
             .arg("-c")

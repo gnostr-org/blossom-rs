@@ -26,12 +26,16 @@ pub async fn build_nip34_router(
 ) -> Result<axum::Router, Box<dyn std::error::Error>> {
     let state = Arc::new(Nip34State::new(config).await?);
 
+    // Git pack uploads can be large — set 256MB body limit for git endpoints
+    let git_routes =
+        git_server::git_router().layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024));
+
     let app = axum::Router::new()
         .route(
             "/",
             axum::routing::get(relay::dispatch::main_handler).post(relay::dispatch::main_handler),
         )
-        .merge(git_server::git_router())
+        .merge(git_routes)
         .merge(relay::admin::relay_admin_router())
         .with_state(state);
 

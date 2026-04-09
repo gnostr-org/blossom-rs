@@ -4564,272 +4564,491 @@ pub async fn run_loop(
                         }
                     }
                     5 => {
-                        if key.code == KeyCode::Char('r') {
-                            app.refresh_nip96();
+                        // NIPs container — sub-tab navigation + dispatch
+                        match key.code {
+                            KeyCode::Char('[') => {
+                                app.nip_tab =
+                                    app.nip_tab.saturating_sub(1);
+                            }
+                            KeyCode::Char(']') => {
+                                app.nip_tab = (app.nip_tab + 1)
+                                    .min(NIP_TAB_NAMES.len() - 1);
+                            }
+                            _ => match app.nip_tab {
+                                // NIP-65 Relay List
+                                0 => {
+                                    if app.nip65_relay_edit {
+                                        match key.code {
+                                            KeyCode::Enter | KeyCode::Esc => {
+                                                app.nip65_relay_edit = false;
+                                            }
+                                            KeyCode::Char(c) => {
+                                                app.nip65_nostr_relay.push(c);
+                                            }
+                                            KeyCode::Backspace => {
+                                                app.nip65_nostr_relay.pop();
+                                            }
+                                            _ => {}
+                                        }
+                                    } else if app.nip65_input_mode {
+                                        match key.code {
+                                            KeyCode::Enter => {
+                                                let url = app
+                                                    .nip65_input
+                                                    .trim()
+                                                    .to_string();
+                                                if !url.is_empty() {
+                                                    let marker = app
+                                                        .nip65_marker
+                                                        .clone();
+                                                    app.nip65_relays
+                                                        .push((url, marker));
+                                                }
+                                                app.nip65_input.clear();
+                                                app.nip65_input_mode = false;
+                                            }
+                                            KeyCode::Esc => {
+                                                app.nip65_input.clear();
+                                                app.nip65_input_mode = false;
+                                            }
+                                            KeyCode::Char(c) => {
+                                                app.nip65_input.push(c);
+                                            }
+                                            KeyCode::Backspace => {
+                                                app.nip65_input.pop();
+                                            }
+                                            _ => {}
+                                        }
+                                    } else {
+                                        match key.code {
+                                            KeyCode::Char('a') => {
+                                                app.nip65_input_mode = true;
+                                                app.nip65_input.clear();
+                                            }
+                                            KeyCode::Char('d')
+                                            | KeyCode::Delete => {
+                                                let sel = app.nip65_selected;
+                                                if sel < app.nip65_relays.len() {
+                                                    app.nip65_relays.remove(sel);
+                                                    if app.nip65_selected
+                                                        >= app.nip65_relays.len()
+                                                        && !app
+                                                            .nip65_relays
+                                                            .is_empty()
+                                                    {
+                                                        app.nip65_selected =
+                                                            app.nip65_relays
+                                                                .len()
+                                                                - 1;
+                                                    }
+                                                }
+                                            }
+                                            KeyCode::Char('m') => {
+                                                app.nip65_marker_idx =
+                                                    (app.nip65_marker_idx + 1)
+                                                        % 3;
+                                                app.nip65_marker = match app
+                                                    .nip65_marker_idx
+                                                {
+                                                    0 => "".into(),
+                                                    1 => "read".into(),
+                                                    _ => "write".into(),
+                                                };
+                                                let sel = app.nip65_selected;
+                                                if let Some(r) = app
+                                                    .nip65_relays
+                                                    .get_mut(sel)
+                                                {
+                                                    r.1 =
+                                                        app.nip65_marker.clone();
+                                                }
+                                            }
+                                            KeyCode::Char('R') => {
+                                                app.nip65_relay_edit = true;
+                                            }
+                                            KeyCode::Char('P') => {
+                                                if let Some(sk) =
+                                                    &app.secret_key
+                                                {
+                                                    let relays =
+                                                        app.nip65_relays.clone();
+                                                    match crate::nostr_sign::kind10002_relay_list(sk, &relays) {
+                                                        Ok(ev) => {
+                                                            app.notification = Some((
+                                                                format!(
+                                                                    "Relay list: {}…",
+                                                                    &ev["id"].as_str().unwrap_or("")[..8]
+                                                                ),
+                                                                false,
+                                                            ));
+                                                        }
+                                                        Err(e) => {
+                                                            app.notification = Some((
+                                                                format!("Sign error: {e}"),
+                                                                true,
+                                                            ));
+                                                        }
+                                                    }
+                                                } else {
+                                                    app.notification = Some((
+                                                        "No key — go to Keygen first".into(),
+                                                        true,
+                                                    ));
+                                                }
+                                            }
+                                            KeyCode::Up
+                                            | KeyCode::Char('k') => {
+                                                app.nip65_selected =
+                                                    app.nip65_selected
+                                                        .saturating_sub(1);
+                                            }
+                                            KeyCode::Down
+                                            | KeyCode::Char('j') => {
+                                                if !app.nip65_relays.is_empty()
+                                                {
+                                                    app.nip65_selected = (app
+                                                        .nip65_selected
+                                                        + 1)
+                                                    .min(
+                                                        app.nip65_relays.len()
+                                                            - 1,
+                                                    );
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                // NIP-96
+                                1 => {
+                                    if key.code == KeyCode::Char('r') {
+                                        app.refresh_nip96();
+                                    }
+                                }
+                                // NIP-34
+                                2 => match key.code {
+                                    KeyCode::Char('r') => {
+                                        app.nip34_relay_edit = true
+                                    }
+                                    KeyCode::Char('c') => {
+                                        app.connect_nip34_relay()
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') => {
+                                        let i = app
+                                            .nip34_events_table
+                                            .selected()
+                                            .unwrap_or(0);
+                                        if i > 0 {
+                                            app.nip34_events_table
+                                                .select(Some(i - 1));
+                                        }
+                                    }
+                                    KeyCode::Down | KeyCode::Char('j') => {
+                                        let i = app
+                                            .nip34_events_table
+                                            .selected()
+                                            .unwrap_or(0);
+                                        let max = app
+                                            .nip34_events
+                                            .len()
+                                            .saturating_sub(1);
+                                        app.nip34_events_table
+                                            .select(Some((i + 1).min(max)));
+                                    }
+                                    _ => {}
+                                },
+                                // NIP-B7 Blossom Server List
+                                3 => {
+                                    if app.nipb7_relay_edit {
+                                        match key.code {
+                                            KeyCode::Enter | KeyCode::Esc => {
+                                                app.nipb7_relay_edit = false;
+                                            }
+                                            KeyCode::Char(c) => {
+                                                app.nipb7_nostr_relay.push(c);
+                                            }
+                                            KeyCode::Backspace => {
+                                                app.nipb7_nostr_relay.pop();
+                                            }
+                                            _ => {}
+                                        }
+                                    } else if app.nipb7_input_mode {
+                                        match key.code {
+                                            KeyCode::Enter => {
+                                                let url = app
+                                                    .nipb7_input
+                                                    .trim()
+                                                    .to_string();
+                                                if !url.is_empty() {
+                                                    app.nipb7_servers.push(url);
+                                                }
+                                                app.nipb7_input.clear();
+                                                app.nipb7_input_mode = false;
+                                            }
+                                            KeyCode::Esc => {
+                                                app.nipb7_input.clear();
+                                                app.nipb7_input_mode = false;
+                                            }
+                                            KeyCode::Char(c) => {
+                                                app.nipb7_input.push(c);
+                                            }
+                                            KeyCode::Backspace => {
+                                                app.nipb7_input.pop();
+                                            }
+                                            _ => {}
+                                        }
+                                    } else {
+                                        match key.code {
+                                            KeyCode::Char('a') => {
+                                                app.nipb7_input_mode = true;
+                                                app.nipb7_input.clear();
+                                            }
+                                            KeyCode::Char('d')
+                                            | KeyCode::Delete => {
+                                                let sel = app.nipb7_selected;
+                                                if sel < app.nipb7_servers.len() {
+                                                    app.nipb7_servers.remove(sel);
+                                                    if app.nipb7_selected
+                                                        >= app.nipb7_servers.len()
+                                                        && !app
+                                                            .nipb7_servers
+                                                            .is_empty()
+                                                    {
+                                                        app.nipb7_selected =
+                                                            app.nipb7_servers
+                                                                .len()
+                                                                - 1;
+                                                    }
+                                                }
+                                            }
+                                            KeyCode::Char('R') => {
+                                                app.nipb7_relay_edit = true;
+                                            }
+                                            KeyCode::Char('P') => {
+                                                if let Some(sk) =
+                                                    &app.secret_key
+                                                {
+                                                    let servers =
+                                                        app.nipb7_servers.clone();
+                                                    match crate::nostr_sign::kind10063_server_list(sk, &servers) {
+                                                        Ok(ev) => {
+                                                            app.notification = Some((
+                                                                format!(
+                                                                    "Server list: {}…",
+                                                                    &ev["id"].as_str().unwrap_or("")[..8]
+                                                                ),
+                                                                false,
+                                                            ));
+                                                        }
+                                                        Err(e) => {
+                                                            app.notification = Some((
+                                                                format!("Sign error: {e}"),
+                                                                true,
+                                                            ));
+                                                        }
+                                                    }
+                                                } else {
+                                                    app.notification = Some((
+                                                        "No key — go to Keygen first".into(),
+                                                        true,
+                                                    ));
+                                                }
+                                            }
+                                            KeyCode::Up
+                                            | KeyCode::Char('k') => {
+                                                app.nipb7_selected =
+                                                    app.nipb7_selected
+                                                        .saturating_sub(1);
+                                            }
+                                            KeyCode::Down
+                                            | KeyCode::Char('j') => {
+                                                if !app.nipb7_servers.is_empty()
+                                                {
+                                                    app.nipb7_selected = (app
+                                                        .nipb7_selected
+                                                        + 1)
+                                                    .min(
+                                                        app.nipb7_servers.len()
+                                                            - 1,
+                                                    );
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                // Profile (NIP-01)
+                                _ => {
+                                    if app.profile_relay_edit {
+                                        match key.code {
+                                            KeyCode::Enter | KeyCode::Esc => {
+                                                app.profile_relay_edit = false;
+                                            }
+                                            KeyCode::Char(c) => {
+                                                app.profile_nostr_relay.push(c);
+                                            }
+                                            KeyCode::Backspace => {
+                                                app.profile_nostr_relay.pop();
+                                            }
+                                            _ => {}
+                                        }
+                                    } else if app.profile_editing {
+                                        match key.code {
+                                            KeyCode::Esc => {
+                                                app.profile_editing = false;
+                                            }
+                                            KeyCode::Enter => {
+                                                app.profile_editing = false;
+                                                app.profile_edit_field =
+                                                    (app.profile_edit_field + 1)
+                                                        .min(5);
+                                            }
+                                            KeyCode::Char(c) => {
+                                                match app.profile_edit_field {
+                                                    0 => {
+                                                        app.profile_name.push(c)
+                                                    }
+                                                    1 => {
+                                                        app.profile_about.push(c)
+                                                    }
+                                                    2 => {
+                                                        app.profile_picture
+                                                            .push(c)
+                                                    }
+                                                    3 => {
+                                                        app.profile_nip05.push(c)
+                                                    }
+                                                    4 => {
+                                                        app.profile_website
+                                                            .push(c)
+                                                    }
+                                                    5 => {
+                                                        app.profile_lud16.push(c)
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            KeyCode::Backspace => {
+                                                match app.profile_edit_field {
+                                                    0 => {
+                                                        app.profile_name.pop();
+                                                    }
+                                                    1 => {
+                                                        app.profile_about.pop();
+                                                    }
+                                                    2 => {
+                                                        app.profile_picture.pop();
+                                                    }
+                                                    3 => {
+                                                        app.profile_nip05.pop();
+                                                    }
+                                                    4 => {
+                                                        app.profile_website.pop();
+                                                    }
+                                                    5 => {
+                                                        app.profile_lud16.pop();
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    } else {
+                                        match key.code {
+                                            KeyCode::Up => {
+                                                app.profile_edit_field =
+                                                    app.profile_edit_field
+                                                        .saturating_sub(1);
+                                            }
+                                            KeyCode::Down => {
+                                                app.profile_edit_field =
+                                                    (app.profile_edit_field + 1)
+                                                        .min(5);
+                                            }
+                                            KeyCode::Char('1') => {
+                                                app.profile_edit_field = 0
+                                            }
+                                            KeyCode::Char('2') => {
+                                                app.profile_edit_field = 1
+                                            }
+                                            KeyCode::Char('3') => {
+                                                app.profile_edit_field = 2
+                                            }
+                                            KeyCode::Char('4') => {
+                                                app.profile_edit_field = 3
+                                            }
+                                            KeyCode::Char('5') => {
+                                                app.profile_edit_field = 4
+                                            }
+                                            KeyCode::Char('6') => {
+                                                app.profile_edit_field = 5
+                                            }
+                                            KeyCode::Char('e')
+                                            | KeyCode::Enter => {
+                                                app.profile_editing = true;
+                                            }
+                                            KeyCode::Char('r') => {
+                                                app.profile_relay_edit = true;
+                                            }
+                                            KeyCode::Char('P') => {
+                                                if let Some(sk) =
+                                                    &app.secret_key
+                                                {
+                                                    let mut meta =
+                                                        serde_json::Map::new();
+                                                    macro_rules! ins {
+                                                        ($k:expr, $v:expr) => {
+                                                            if !$v.is_empty() {
+                                                                meta.insert(
+                                                                    $k.into(),
+                                                                    serde_json::Value::String($v.clone()),
+                                                                );
+                                                            }
+                                                        };
+                                                    }
+                                                    ins!("name", app.profile_name);
+                                                    ins!("about", app.profile_about);
+                                                    ins!("picture", app.profile_picture);
+                                                    ins!("nip05", app.profile_nip05);
+                                                    ins!("website", app.profile_website);
+                                                    ins!("lud16", app.profile_lud16);
+                                                    match crate::nostr_sign::kind0_metadata(sk, &meta) {
+                                                        Ok(ev) => {
+                                                            app.notification = Some((
+                                                                format!(
+                                                                    "Profile event: {}…",
+                                                                    &ev["id"].as_str().unwrap_or("")[..8]
+                                                                ),
+                                                                false,
+                                                            ));
+                                                        }
+                                                        Err(e) => {
+                                                            app.notification = Some((
+                                                                format!("Sign error: {e}"),
+                                                                true,
+                                                            ));
+                                                        }
+                                                    }
+                                                } else {
+                                                    app.notification = Some((
+                                                        "No private key — go to Keygen tab first".into(),
+                                                        true,
+                                                    ));
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            },
                         }
                     }
-                    6 => match key.code {
-                        KeyCode::Char('r') => app.nip34_relay_edit = true,
-                        KeyCode::Char('c') => app.connect_nip34_relay(),
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            let i = app.nip34_events_table.selected().unwrap_or(0);
-                            if i > 0 {
-                                app.nip34_events_table.select(Some(i - 1));
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            let i = app.nip34_events_table.selected().unwrap_or(0);
-                            let max = app.nip34_events.len().saturating_sub(1);
-                            app.nip34_events_table.select(Some((i + 1).min(max)));
-                        }
-                        _ => {}
-                    },
-                    7 => {
+                    6 => {
                         if key.code == KeyCode::Char('r') {
                             app.refresh_status();
                         }
                     }
-                    5 => {
-                        // NIP-65 Relay List tab
-                        if app.nip65_relay_edit {
-                            match key.code {
-                                KeyCode::Enter | KeyCode::Esc => {
-                                    app.nip65_relay_edit = false;
-                                }
-                                KeyCode::Char(c) => {
-                                    app.nip65_nostr_relay.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.nip65_nostr_relay.pop();
-                                }
-                                _ => {}
-                            }
-                        } else if app.nip65_input_mode {
-                            match key.code {
-                                KeyCode::Enter => {
-                                    let url =
-                                        app.nip65_input.trim().to_string();
-                                    if !url.is_empty() {
-                                        let marker =
-                                            app.nip65_marker.clone();
-                                        app.nip65_relays
-                                            .push((url, marker));
-                                    }
-                                    app.nip65_input.clear();
-                                    app.nip65_input_mode = false;
-                                }
-                                KeyCode::Esc => {
-                                    app.nip65_input.clear();
-                                    app.nip65_input_mode = false;
-                                }
-                                KeyCode::Char(c) => {
-                                    app.nip65_input.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.nip65_input.pop();
-                                }
-                                _ => {}
-                            }
-                        } else {
-                            match key.code {
-                                KeyCode::Char('a') => {
-                                    app.nip65_input_mode = true;
-                                    app.nip65_input.clear();
-                                }
-                                KeyCode::Char('d') | KeyCode::Delete => {
-                                    let sel = app.nip65_selected;
-                                    if sel < app.nip65_relays.len() {
-                                        app.nip65_relays.remove(sel);
-                                        if app.nip65_selected
-                                            >= app.nip65_relays.len()
-                                            && !app.nip65_relays.is_empty()
-                                        {
-                                            app.nip65_selected =
-                                                app.nip65_relays.len() - 1;
-                                        }
-                                    }
-                                }
-                                KeyCode::Char('m') => {
-                                    app.nip65_marker_idx =
-                                        (app.nip65_marker_idx + 1) % 3;
-                                    app.nip65_marker = match app
-                                        .nip65_marker_idx
-                                    {
-                                        0 => "".into(),
-                                        1 => "read".into(),
-                                        _ => "write".into(),
-                                    };
-                                    // update selected relay marker
-                                    let sel = app.nip65_selected;
-                                    if let Some(r) =
-                                        app.nip65_relays.get_mut(sel)
-                                    {
-                                        r.1 = app.nip65_marker.clone();
-                                    }
-                                }
-                                KeyCode::Char('R') => {
-                                    app.nip65_relay_edit = true;
-                                }
-                                KeyCode::Char('P') => {
-                                    if let Some(sk) = &app.secret_key {
-                                        let relays =
-                                            app.nip65_relays.clone();
-                                        match crate::nostr_sign::kind10002_relay_list(sk, &relays) {
-                                            Ok(ev) => {
-                                                app.notification = Some((
-                                                    format!(
-                                                        "Relay list event: {}…",
-                                                        &ev["id"]
-                                                            .as_str()
-                                                            .unwrap_or("")[..8]
-                                                    ),
-                                                    false,
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                app.notification = Some((
-                                                    format!(
-                                                        "Sign error: {e}"
-                                                    ),
-                                                    true,
-                                                ));
-                                            }
-                                        }
-                                    } else {
-                                        app.notification = Some((
-                                            "No key — go to Keygen first"
-                                                .into(),
-                                            true,
-                                        ));
-                                    }
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    app.nip65_selected =
-                                        app.nip65_selected.saturating_sub(1);
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    if !app.nip65_relays.is_empty() {
-                                        app.nip65_selected = (app
-                                            .nip65_selected
-                                            + 1)
-                                        .min(
-                                            app.nip65_relays.len() - 1,
-                                        );
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    8 => {
-                        // NIP-B7 Blossom Server List tab
-                        if app.nipb7_relay_edit {
-                            match key.code {
-                                KeyCode::Enter | KeyCode::Esc => {
-                                    app.nipb7_relay_edit = false;
-                                }
-                                KeyCode::Char(c) => {
-                                    app.nipb7_nostr_relay.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.nipb7_nostr_relay.pop();
-                                }
-                                _ => {}
-                            }
-                        } else if app.nipb7_input_mode {
-                            match key.code {
-                                KeyCode::Enter => {
-                                    let url =
-                                        app.nipb7_input.trim().to_string();
-                                    if !url.is_empty() {
-                                        app.nipb7_servers.push(url);
-                                    }
-                                    app.nipb7_input.clear();
-                                    app.nipb7_input_mode = false;
-                                }
-                                KeyCode::Esc => {
-                                    app.nipb7_input.clear();
-                                    app.nipb7_input_mode = false;
-                                }
-                                KeyCode::Char(c) => {
-                                    app.nipb7_input.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.nipb7_input.pop();
-                                }
-                                _ => {}
-                            }
-                        } else {
-                            match key.code {
-                                KeyCode::Char('a') => {
-                                    app.nipb7_input_mode = true;
-                                    app.nipb7_input.clear();
-                                }
-                                KeyCode::Char('d') | KeyCode::Delete => {
-                                    let sel = app.nipb7_selected;
-                                    if sel < app.nipb7_servers.len() {
-                                        app.nipb7_servers.remove(sel);
-                                        if app.nipb7_selected
-                                            >= app.nipb7_servers.len()
-                                            && !app.nipb7_servers.is_empty()
-                                        {
-                                            app.nipb7_selected =
-                                                app.nipb7_servers.len() - 1;
-                                        }
-                                    }
-                                }
-                                KeyCode::Char('R') => {
-                                    app.nipb7_relay_edit = true;
-                                }
-                                KeyCode::Char('P') => {
-                                    if let Some(sk) = &app.secret_key {
-                                        let servers =
-                                            app.nipb7_servers.clone();
-                                        match crate::nostr_sign::kind10063_server_list(sk, &servers) {
-                                            Ok(ev) => {
-                                                app.notification = Some((
-                                                    format!(
-                                                        "Server list event: {}…",
-                                                        &ev["id"]
-                                                            .as_str()
-                                                            .unwrap_or("")[..8]
-                                                    ),
-                                                    false,
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                app.notification = Some((
-                                                    format!("Sign error: {e}"),
-                                                    true,
-                                                ));
-                                            }
-                                        }
-                                    } else {
-                                        app.notification = Some((
-                                            "No key — go to Keygen first".into(),
-                                            true,
-                                        ));
-                                    }
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    app.nipb7_selected =
-                                        app.nipb7_selected.saturating_sub(1);
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    if !app.nipb7_servers.is_empty() {
-                                        app.nipb7_selected = (app
-                                            .nipb7_selected
-                                            + 1)
-                                        .min(
-                                            app.nipb7_servers.len() - 1,
-                                        );
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    10 => match key.code {
+                    7 => match key.code {
                         KeyCode::Char('g') => app.generate_keypair(),
                         KeyCode::Char('1') => app.copy_keygen_field(1),
                         KeyCode::Char('2') => app.copy_keygen_field(2),
@@ -4837,128 +5056,6 @@ pub async fn run_loop(
                         KeyCode::Char('4') => app.copy_keygen_field(4),
                         _ => {}
                     },
-                    11 => {
-                        // Profile tab
-                        if app.profile_relay_edit {
-                            match key.code {
-                                KeyCode::Enter | KeyCode::Esc => {
-                                    app.profile_relay_edit = false;
-                                }
-                                KeyCode::Char(c) => {
-                                    app.profile_nostr_relay.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.profile_nostr_relay.pop();
-                                }
-                                _ => {}
-                            }
-                        } else if app.profile_editing {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app.profile_editing = false;
-                                }
-                                KeyCode::Enter => {
-                                    // Commit edit, advance to next field.
-                                    app.profile_editing = false;
-                                    app.profile_edit_field =
-                                        (app.profile_edit_field + 1).min(5);
-                                }
-                                KeyCode::Char(c) => {
-                                    match app.profile_edit_field {
-                                        0 => app.profile_name.push(c),
-                                        1 => app.profile_about.push(c),
-                                        2 => app.profile_picture.push(c),
-                                        3 => app.profile_nip05.push(c),
-                                        4 => app.profile_website.push(c),
-                                        5 => app.profile_lud16.push(c),
-                                        _ => {}
-                                    }
-                                }
-                                KeyCode::Backspace => {
-                                    match app.profile_edit_field {
-                                        0 => { app.profile_name.pop(); }
-                                        1 => { app.profile_about.pop(); }
-                                        2 => { app.profile_picture.pop(); }
-                                        3 => { app.profile_nip05.pop(); }
-                                        4 => { app.profile_website.pop(); }
-                                        5 => { app.profile_lud16.pop(); }
-                                        _ => {}
-                                    }
-                                }
-                                _ => {}
-                            }
-                        } else {
-                            match key.code {
-                                KeyCode::Up => {
-                                    app.profile_edit_field =
-                                        app.profile_edit_field
-                                            .saturating_sub(1);
-                                }
-                                KeyCode::Down => {
-                                    app.profile_edit_field =
-                                        (app.profile_edit_field + 1).min(5);
-                                }
-                                KeyCode::Char('1') => app.profile_edit_field = 0,
-                                KeyCode::Char('2') => app.profile_edit_field = 1,
-                                KeyCode::Char('3') => app.profile_edit_field = 2,
-                                KeyCode::Char('4') => app.profile_edit_field = 3,
-                                KeyCode::Char('5') => app.profile_edit_field = 4,
-                                KeyCode::Char('6') => app.profile_edit_field = 5,
-                                KeyCode::Char('e') | KeyCode::Enter => {
-                                    app.profile_editing = true;
-                                }
-                                KeyCode::Char('r') => {
-                                    app.profile_relay_edit = true;
-                                }
-                                KeyCode::Char('P') => {
-                                    // Publish kind:0
-                                    if let Some(sk) = &app.secret_key {
-                                        let mut meta =
-                                            serde_json::Map::new();
-                                        macro_rules! ins {
-                                            ($k:expr, $v:expr) => {
-                                                if !$v.is_empty() {
-                                                    meta.insert(
-                                                        $k.into(),
-                                                        serde_json::Value::String($v.clone()),
-                                                    );
-                                                }
-                                            };
-                                        }
-                                        ins!("name",    app.profile_name);
-                                        ins!("about",   app.profile_about);
-                                        ins!("picture", app.profile_picture);
-                                        ins!("nip05",   app.profile_nip05);
-                                        ins!("website", app.profile_website);
-                                        ins!("lud16",   app.profile_lud16);
-                                        match crate::nostr_sign::kind0_metadata(sk, &meta) {
-                                            Ok(ev) => {
-                                                app.notification = Some((
-                                                    format!(
-                                                        "Profile event id: {}",
-                                                        &ev["id"].as_str().unwrap_or("")[..8]
-                                                    ),
-                                                    false,
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                app.notification = Some((
-                                                    format!("Sign error: {e}"),
-                                                    true,
-                                                ));
-                                            }
-                                        }
-                                    } else {
-                                        app.notification = Some((
-                                            "No private key — go to Keygen tab first".into(),
-                                            true,
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
                     _ => {}
                 }
             }

@@ -2151,6 +2151,19 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // Horizontal split: left = file browser (40%), right = controls (60%).
+    let h_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(60),
+        ])
+        .split(inner);
+
+    // ── Left: file browser ───────────────────────────────────────────────────
+    draw_batch_filebrowser(f, app, h_split[0]);
+
+    // ── Right: controls ──────────────────────────────────────────────────────
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -2158,7 +2171,7 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(1), // hints
             Constraint::Min(1),    // queue
         ])
-        .split(inner);
+        .split(h_split[1]);
 
     // Path input
     let input_style = if app.batch_input_mode {
@@ -2171,7 +2184,7 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let input_title = if app.batch_input_mode {
         " Path (Esc: cancel) "
     } else {
-        " Path (i: edit, Enter: add) "
+        " Path (f: browse  i: edit  Enter: add) "
     };
     let input = Paragraph::new(app.batch_input.as_str())
         .block(
@@ -2202,7 +2215,8 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .filter(|i| matches!(i.status, BatchStatus::Failed(_)))
         .count();
     let hint = format!(
-        " {} queued  {} done  {} failed  │  Enter: start upload  x: remove last",
+        " {} queued  {} done  {} failed  \
+         │  Enter: start upload  x: remove last",
         app.batch_items.len(),
         done,
         failed,
@@ -2218,9 +2232,15 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|item| {
             let (status_text, status_style) = match &item.status {
-                BatchStatus::Pending => ("pending", Style::default().fg(COLOR_DIM)),
-                BatchStatus::Running => ("running…", Style::default().fg(Color::Yellow)),
-                BatchStatus::Done(_) => ("✓ done", Style::default().fg(COLOR_OK)),
+                BatchStatus::Pending => {
+                    ("pending", Style::default().fg(COLOR_DIM))
+                }
+                BatchStatus::Running => {
+                    ("running…", Style::default().fg(Color::Yellow))
+                }
+                BatchStatus::Done(_) => {
+                    ("✓ done", Style::default().fg(COLOR_OK))
+                }
                 BatchStatus::Failed(e) => {
                     let _ = e;
                     ("✗ failed", Style::default().fg(COLOR_ERR))
@@ -2255,6 +2275,98 @@ pub fn draw_batch_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .bottom_margin(1),
     );
     f.render_widget(table, chunks[2]);
+}
+
+/// File browser panel for the batch tab.
+fn draw_batch_filebrowser(f: &mut Frame, app: &mut App, area: Rect) {
+    let border_style = if app.batch_filebrowser_active {
+        Style::default()
+            .fg(COLOR_ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(COLOR_DIM)
+    };
+
+    let cwd_label =
+        app.batch_filebrowser_cwd.to_string_lossy().into_owned();
+    let max_cwd = area.width.saturating_sub(4) as usize;
+    let cwd_display = if cwd_label.len() > max_cwd {
+        format!(
+            "…{}",
+            &cwd_label[cwd_label.len().saturating_sub(max_cwd)..]
+        )
+    } else {
+        cwd_label
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", cwd_display))
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if !app.batch_filebrowser_active
+        && app.batch_filebrowser_entries.is_empty()
+    {
+        let hint = Paragraph::new("  Press f to browse files")
+            .style(Style::default().fg(COLOR_DIM));
+        f.render_widget(hint, inner);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .batch_filebrowser_entries
+        .iter()
+        .map(|e| {
+            let (icon, base_style) = if e.is_dir {
+                ("▶ ", Style::default().fg(Color::Cyan))
+            } else {
+                ("  ", Style::default().fg(Color::White))
+            };
+            let mut spans =
+                vec![Span::styled(format!("{icon}{}", e.name), base_style)];
+
+            match &e.git {
+                Some(GitRepoKind::Repo) => {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        " git",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                Some(GitRepoKind::Bare) => {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        " bare",
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                None => {}
+            }
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(COLOR_SELECTED_BG)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("› ");
+
+    f.render_stateful_widget(
+        list,
+        inner,
+        &mut app.batch_filebrowser_list,
+    );
 }
 
 pub fn draw_admin_tab(f: &mut Frame, app: &App, area: Rect) {

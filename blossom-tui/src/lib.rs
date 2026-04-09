@@ -12,12 +12,8 @@ use std::io::Stdout;
 use std::time::Duration;
 
 use blossom_rs::{BlobDescriptor, BlossomClient, BlossomSigner, Signer};
-use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    },
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
 use ratatui::{
     backend::CrosstermBackend,

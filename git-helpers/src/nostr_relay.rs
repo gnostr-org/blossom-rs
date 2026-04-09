@@ -592,4 +592,320 @@ mod tests {
             assert!(result.is_err());
         }
     }
+
+    // ── New patterns from `gnostr query --kinds 30617 --limit 100` ────────
+
+    // Pattern: SSH-only clone URL — must skip git@ URLs, fall back to web tag
+    fn event_ssh_only_clone() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "test-nip34-repo"],
+                ["name", "test-nip34-repo"],
+                ["clone", "git@example.com:test/test-nip34-repo.git"]
+            ]
+        })
+    }
+
+    // Pattern: SSH clone + web tag fallback
+    fn event_ssh_clone_with_web() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "gitmark"],
+                ["name", "gitmark"],
+                ["clone", "git@github.com:solidpayorg/gitmark.git"],
+                ["web", "https://github.com/solidpayorg/gitmark"]
+            ]
+        })
+    }
+
+    // Pattern: github.com clone URL (not a GRASP server but valid HTTPS)
+    fn event_github_clone() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "get_file_hash"],
+                ["name", "get_file_hash"],
+                ["clone", "https://github.com/gnostr-org/get_file_hash"],
+                ["web", "https://github.com/gnostr-org/get_file_hash"]
+            ]
+        })
+    }
+
+    // Pattern: GRASP first then GitHub second — GRASP wins
+    fn event_grasp_then_github() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "societybuilder"],
+                ["name", "societybuilder"],
+                ["clone",
+                    "https://pyramid.fiatjaf.com/npub1elta7cneng3w8p9y4dw633qzdjr4kyvaparuyuttyrx6e8xp7xnq32cume/societybuilder.git",
+                    "https://github.com/lez/societybuilder"
+                ],
+                ["web", "https://pyramid.fiatjaf.com/npub1elta7cneng3w8p9y4dw633qzdjr4kyvaparuyuttyrx6e8xp7xnq32cume/societybuilder"],
+                ["relays", "wss://relay.hunos.hu", "wss://nostr.huszonegy.world", "wss://relay.primal.net",
+                    "wss://relay.damus.io", "wss://nos.lol", "wss://pyramid.fiatjaf.com", "wss://relay.nostr.hu"]
+            ]
+        })
+    }
+
+    // Pattern: GitHub first then GRASP — GitHub wins (first HTTPS URL)
+    fn event_github_then_grasp() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "societybuilder2"],
+                ["name", "societybuilder2"],
+                ["clone",
+                    "https://github.com/lez/societybuilder2.git",
+                    "https://pyramid.fiatjaf.com/npub1elta7cneng3w8p9y4dw633qzdjr4kyvaparuyuttyrx6e8xp7xnq32cume/societybuilder2.git"
+                ]
+            ]
+        })
+    }
+
+    // Pattern: THREE clone URLs (gitlab + github + grasp)
+    fn event_three_clone_urls() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "budabit-landing"],
+                ["name", "budabit-landing"],
+                ["clone",
+                    "https://gitlab.com/Pleb5/budabit-landing.git",
+                    "https://github.com/Pleb5/budabit-landing.git",
+                    "https://grasp.budabit.club/npub16p8v7varqwjes5hak6q7mz6pygqm4pwc6gve4mrned3xs8tz42gq7kfhdw/budabit-landing.git"
+                ],
+                ["web", "https://gitlab.com/Pleb5/budabit-landing"],
+                ["relays", "wss://relay.damus.io", "wss://grasp.budabit.club"]
+            ]
+        })
+    }
+
+    // Pattern: THREE clone URLs (codeberg + github + gitnostr)
+    fn event_oba() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "oba"],
+                ["name", "Open Bitcoin Academy"],
+                ["clone",
+                    "https://codeberg.org/OpenBitcoinAcademy/oba.git",
+                    "https://github.com/OpenBitcoinAcademy/oba.git",
+                    "https://gitnostr.com/npub1qfcefq43er545mwvg69093almdkqs4wmcxaxjg9ad0rzq834qqfq9rhflh/oba.git"
+                ],
+                ["web", "https://codeberg.org/OpenBitcoinAcademy/oba"],
+                ["relays", "wss://gitnostr.com", "wss://relay.damus.io", "wss://nos.lol", "wss://relay.nostr.band"]
+            ]
+        })
+    }
+
+    // Pattern: relay URL with path segment (wss://ditto.pub/relay)
+    fn event_with_relay_paths() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "nip89-app-directory"],
+                ["name", "Nip89 App Directory"],
+                ["clone",
+                    "https://relay.ngit.dev/npub14rg4vrt2v374q95ezeeydu3hkdhmzglcj950mggacap4x0lv0gyq04wun7/nip89-app-directory.git",
+                    "https://git.shakespeare.diy/npub14rg4vrt2v374q95ezeeydu3hkdhmzglcj950mggacap4x0lv0gyq04wun7/nip89-app-directory.git"
+                ],
+                ["relays",
+                    "wss://relay.ngit.dev/", "wss://git.shakespeare.diy/",
+                    "wss://relay.ditto.pub/", "wss://relay.damus.io/", "wss://nos.lol/",
+                    "wss://nostr.wine/", "wss://relay.primal.net/", "wss://nostr.oxtr.dev/",
+                    "wss://offchain.pub/", "wss://relay.mostr.pub/",
+                    "wss://ditto.pub/relay", "wss://search.nos.today/",
+                    "wss://relay.coinos.io/", "wss://drops.basspistol.org/",
+                    "wss://relay.noswhere.com/", "wss://gleasonator.dev/relay"
+                ]
+            ]
+        })
+    }
+
+    // Pattern: 9 relays all with trailing slashes (bchstr24)
+    fn event_nine_relays() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "bchstr24"],
+                ["name", "Bchstr24"],
+                ["clone", "https://relay.ngit.dev/npub1madu4w57wnxpwexfwuawzcpfnh094nmeg9hze9n43kazyhn8qlxq4lrgfg/bchstr24.git"],
+                ["relays",
+                    "wss://relay.ngit.dev/", "wss://relay.damus.io/", "wss://nostr.land/",
+                    "wss://nostr.wine/", "wss://nos.lol/", "wss://nostr.mom/",
+                    "wss://cache1.primal.net/", "wss://relay.snort.social/", "wss://relay.nostr.pub/"
+                ],
+                ["web", "https://bchstr24.shakespeare.wtf"]
+            ]
+        })
+    }
+
+    // Pattern: no clone/web/relays (deleted repo, just d/name)
+    fn event_deleted_repo() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "test-asdf"],
+                ["name", "test-asdf"],
+                ["deleted", "true"]
+            ]
+        })
+    }
+
+    // Pattern: bare refs tags only (no clone/web)
+    fn event_refs_only() -> Value {
+        serde_json::json!({
+            "kind": 30617,
+            "tags": [
+                ["d", "7"],
+                ["name", "7"],
+                ["HEAD", "ref: refs/heads/gh-pages"],
+                ["refs/heads/gh-pages", "74d90d2a0a86d1424cfdb44e97a25ad54e7c3040"]
+            ]
+        })
+    }
+
+    // ── extract_web_url: new pattern tests ────────────────────────────────
+
+    #[test]
+    fn ssh_only_clone_returns_none() {
+        // git@ URLs are not HTTP(S) — should be skipped, no web fallback → None
+        let result = extract_web_url(&event_ssh_only_clone());
+        eprintln!("ssh_only_clone_returns_none => {result:?}");
+        assert!(result.is_none(), "SSH-only clone should yield None, got: {result:?}");
+    }
+
+    #[test]
+    fn ssh_clone_falls_back_to_web() {
+        // git@ clone skipped, web tag present → web wins
+        let url = extract_web_url(&event_ssh_clone_with_web()).unwrap();
+        eprintln!("ssh_clone_falls_back_to_web => {url}");
+        assert_eq!(url, "https://github.com/solidpayorg/gitmark");
+    }
+
+    #[test]
+    fn github_clone_url_returned() {
+        // github.com is a valid HTTPS clone URL — returned as-is
+        let url = extract_web_url(&event_github_clone()).unwrap();
+        eprintln!("github_clone_url_returned => {url}");
+        assert_eq!(url, "https://github.com/gnostr-org/get_file_hash");
+    }
+
+    #[test]
+    fn grasp_first_then_github_returns_grasp() {
+        let url = extract_web_url(&event_grasp_then_github()).unwrap();
+        eprintln!("grasp_first_then_github_returns_grasp => {url}");
+        assert!(url.starts_with("https://pyramid.fiatjaf.com/"), "expected pyramid GRASP, got: {url}");
+    }
+
+    #[test]
+    fn github_first_then_grasp_returns_github() {
+        // First HTTPS wins regardless of server type
+        let url = extract_web_url(&event_github_then_grasp()).unwrap();
+        eprintln!("github_first_then_grasp_returns_github => {url}");
+        assert!(url.starts_with("https://github.com/"), "expected github first, got: {url}");
+    }
+
+    #[test]
+    fn three_clone_urls_first_wins() {
+        // budabit-landing: gitlab / github / grasp — gitlab is first
+        let url = extract_web_url(&event_three_clone_urls()).unwrap();
+        eprintln!("three_clone_urls_first_wins => {url}");
+        assert!(url.starts_with("https://gitlab.com/"), "expected gitlab first, got: {url}");
+    }
+
+    #[test]
+    fn oba_three_clone_urls_first_wins() {
+        // codeberg / github / gitnostr — codeberg is first
+        let url = extract_web_url(&event_oba()).unwrap();
+        eprintln!("oba_three_clone_urls_first_wins => {url}");
+        assert!(url.starts_with("https://codeberg.org/"), "expected codeberg first, got: {url}");
+    }
+
+    #[test]
+    fn deleted_repo_returns_none() {
+        let result = extract_web_url(&event_deleted_repo());
+        eprintln!("deleted_repo_returns_none => {result:?}");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn refs_only_event_returns_none() {
+        let result = extract_web_url(&event_refs_only());
+        eprintln!("refs_only_event_returns_none => {result:?}");
+        assert!(result.is_none());
+    }
+
+    // ── extract_event_relays: new pattern tests ───────────────────────────
+
+    #[test]
+    fn nine_relays_all_trailing_slashes_stripped() {
+        let relays = extract_event_relays(&event_nine_relays());
+        eprintln!("nine_relays_all_trailing_slashes_stripped => {relays:?}");
+        assert_eq!(relays.len(), 9);
+        for r in &relays {
+            assert!(!r.ends_with('/'), "trailing slash not stripped: {r}");
+        }
+        assert!(relays.contains(&"wss://relay.ngit.dev".to_string()));
+        assert!(relays.contains(&"wss://cache1.primal.net".to_string()));
+    }
+
+    #[test]
+    fn relay_with_path_preserved() {
+        // wss://ditto.pub/relay and wss://gleasonator.dev/relay have path segments
+        // — the path must not be stripped (only trailing slash on host-only URLs)
+        let relays = extract_event_relays(&event_with_relay_paths());
+        eprintln!("relay_with_path_preserved => {relays:?}");
+        assert_eq!(relays.len(), 16);
+        // Path-carrying relays must survive intact
+        assert!(
+            relays.contains(&"wss://ditto.pub/relay".to_string()),
+            "ditto.pub/relay missing: {relays:?}"
+        );
+        assert!(
+            relays.contains(&"wss://gleasonator.dev/relay".to_string()),
+            "gleasonator.dev/relay missing: {relays:?}"
+        );
+        // Host-only trailing slashes must be gone
+        assert!(
+            relays.contains(&"wss://relay.ngit.dev".to_string()),
+            "ngit.dev missing: {relays:?}"
+        );
+    }
+
+    #[test]
+    fn sixteen_relays_count_correct() {
+        let relays = extract_event_relays(&event_with_relay_paths());
+        eprintln!("sixteen_relays_count_correct => {} relays", relays.len());
+        assert_eq!(relays.len(), 16);
+    }
+
+    #[test]
+    fn grasp_then_github_relay_list() {
+        let relays = extract_event_relays(&event_grasp_then_github());
+        eprintln!("grasp_then_github_relay_list => {relays:?}");
+        assert_eq!(relays.len(), 7);
+        assert!(relays.contains(&"wss://pyramid.fiatjaf.com".to_string()));
+    }
+
+    // ── normalize_relay_url: relay-with-path ──────────────────────────────
+
+    #[test]
+    fn normalize_relay_url_with_path_preserved() {
+        // wss://ditto.pub/relay — path component must be kept
+        let out = normalize_relay_url("wss://ditto.pub/relay");
+        eprintln!("normalize_relay_url_with_path_preserved: wss://ditto.pub/relay => {out}");
+        assert_eq!(out, "wss://ditto.pub/relay");
+    }
+
+    #[test]
+    fn normalize_relay_gleasonator_path() {
+        let out = normalize_relay_url("wss://gleasonator.dev/relay");
+        eprintln!("normalize_relay_gleasonator_path: wss://gleasonator.dev/relay => {out}");
+        assert_eq!(out, "wss://gleasonator.dev/relay");
+    }
 }

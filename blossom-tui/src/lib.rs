@@ -10,6 +10,8 @@
 //! - **Keygen** — generate a fresh BIP-340 keypair
 
 pub mod nip19;
+pub mod nostr_relay;
+pub mod nostr_sign;
 
 use std::{cmp::Reverse, io::Stdout, path::PathBuf, time::Duration};
 

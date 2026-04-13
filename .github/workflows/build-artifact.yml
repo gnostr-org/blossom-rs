@@ -1,6 +1,12 @@
 name: build-artifact
 on:
   workflow_call:
+    inputs:
+      os:
+        description: 'OS / target to build (select "all" to build every target)'
+        required: false
+        default: 'all'
+        type: string
   workflow_dispatch:
     inputs:
       os:
@@ -55,7 +61,7 @@ jobs:
     needs: setup
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
@@ -88,15 +94,59 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libssl-dev pkg-config musl-tools
+        sudo apt-get install -y \
+          libssl-dev \
+          pkg-config \
+          musl-tools \
+          build-essential \
+          llvm-dev \
+          libclang-dev \
+          clang \
+          clang-5.0 \
+          libclang-5.0-dev || sudo apt-get install -y libclang-dev
+
+    - name: Install macOS system dependencies
+      if: runner.os == 'macOS'
+      run: |
+        brew update
+
+    - name: Install Windows system dependencies
+      if: runner.os == 'Windows'
+      run: |
+        echo "TODO: install Windows specific deps if neccesary"
+
+    - name: Verify Xcode Command Line Tools
+      if: runner.os == 'macOS'
+      run: xcode-select -p
 
     - name: Install cross
       uses: taiki-e/install-action@v2
       with:
         tool: cross
 
+    - name: Set Clang Environment Variables
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          # Find the actual path of libclang.so to avoid 3.8.x fallbacks
+          SO_PATH=$(find /usr/lib -name "libclang.so*" | head -n 1)
+          if [ -n "$SO_PATH" ]; then
+            LIB_DIR=$(dirname "$SO_PATH")
+            echo "LIBCLANG_PATH=$LIB_DIR" >> $GITHUB_ENV
+            # This helps bindgen find stdarg.h and other built-ins
+            echo "BINDGEN_EXTRA_CLANG_ARGS=-I$(clang -print-resource-dir)/include" >> $GITHUB_ENV
+          fi
+        fi
+        echo $GITHUB_ENV && printenv
+
     - name: Build release binary
-      run: cross build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli
+      shell: bash
+      run: |
+        if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]]; then
+          cargo build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli
+        else
+          cross build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli
+        fi
 
     - name: Bundle release (Unix)
       if: matrix.build != 'windows-x64'

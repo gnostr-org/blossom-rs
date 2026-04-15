@@ -46,6 +46,24 @@ blossom-server \
   --tls-cert cert.pem --tls-key key.pem
 ```
 
+## NIP-34 Git Server
+
+Build with the `nip34` feature and the relay/git server is enabled by default. To run it locally:
+
+```bash
+cargo run -p blossom-server --features nip34 -- \
+  --bind 127.0.0.1:3000 \
+  --base-url http://127.0.0.1:3000 \
+  --nip34-domain 127.0.0.1
+```
+
+Use Git remotes like:
+
+```bash
+git remote add blossom-gnostr http://127.0.0.1:3000/<npub>/<repo>.git
+git push blossom-gnostr HEAD:<branch>
+```
+
 ## Options
 
 ```

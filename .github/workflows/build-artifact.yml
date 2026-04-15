@@ -81,8 +81,14 @@ jobs:
         os:
           - runner: windows-latest
             arch: x64
+            # All features supported on x64 Windows.
+            cargo_test_args: '--all-features'
           - runner: windows-11-arm
             arch: arm64
+            # Exclude the `labels` feature: its candle-* deps pull in
+            # gemm-f16 which emits `fullfp16` ARM SIMD instructions not
+            # available on the windows-11-arm runner.
+            cargo_test_args: '--features server,client,filesystem,s3,s3-compat,db-sqlite,db-postgres,media,iroh-transport,pkarr-discovery,otel'
       fail-fast: false
     name: windows-vcpkg-${{ matrix.os.arch }}
     runs-on: ${{ matrix.os.runner }}
@@ -111,8 +117,7 @@ jobs:
         with:
           path: target
           key: target-${{ github.job }}-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
-      - run: cargo test -j8 --all-features
-      - run: cargo install --path ./git-helpers -j8 --all-features --force
+      - run: cargo test -j8 ${{ matrix.os.cargo_test_args }}
 
   build-artifacts:
     needs: setup

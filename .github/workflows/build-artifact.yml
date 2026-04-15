@@ -89,6 +89,30 @@ jobs:
             # gemm-f16 which emits `fullfp16` ARM SIMD instructions not
             # available on the windows-11-arm runner.
             cargo_test_args: '--features server,client,filesystem,s3,s3-compat,db-sqlite,db-postgres,media,iroh-transport,pkarr-discovery,otel'
+          - runner: ubuntu-latest
+            arch: x64
+            # All features supported on x64 Windows.
+            cargo_test_args: '--all-features'
+          - runner: ubuntu-latest
+            arch: arm64
+            # All features supported on x64 Windows.
+            cargo_test_args: '--all-features'
+          - runner: macos-latest
+            arch: x64
+            # All features supported on x64 Windows.
+            cargo_test_args: '--all-features'
+          - runner: macos-latest
+            arch: arm64
+            # All features supported on x64 Windows.
+            cargo_test_args: '--all-features'
+          - runner: macos-15-intel
+            arch: x64
+            # All features supported on x64 Windows.
+            cargo_test_args: '--all-features'
+          - runner: macos-15-intel
+            arch: arm64
+            # All features supported on x64 Windows.
+            cargo_test_args: '--all-features'
       fail-fast: false
     name: windows-vcpkg-${{ matrix.os.arch }}
     runs-on: ${{ matrix.os.runner }}

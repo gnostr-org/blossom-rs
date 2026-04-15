@@ -114,7 +114,7 @@ jobs:
             # All features supported on x64 Windows.
             cargo_test_args: '--all-features'
       fail-fast: false
-    name: vcpkg-${{ matrix.os.arch }}-${{ matrix.os.arch }}
+    name: vcpkg-${{ matrix.os.runner }}-${{ matrix.os.arch }}
     runs-on: ${{ matrix.os.runner }}
     steps:
       - uses: actions/checkout@v4

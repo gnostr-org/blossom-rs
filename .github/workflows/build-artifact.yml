@@ -237,26 +237,18 @@ jobs:
           rustup target add ${{ matrix.target }} || true
           cross build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features || \
           cargo build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features
-        fi
-        if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+        elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
           rustup target add ${{ matrix.target }} || true
           rustup target add aarch64-linux-musl-gcc || true
           cross build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features || \
           cargo build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features
-        fi
-        if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
+        elif [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
           rustup target add ${{ matrix.target }} || true
           rustup target add x86_64-unknown-linux-musl || true
           cargo build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features || \
           cross build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features
-        fi
-        if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]]; then
-          rustup target add ${{ matrix.target }} || true
-          cargo build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features || \
-          cargo build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features
         else
           rustup target add ${{ matrix.target }} || true
-          cross build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features || \
           cargo build --verbose --release --locked --target ${{ matrix.target }} -p blossom-server -p blossom-cli --all-features
         fi
 

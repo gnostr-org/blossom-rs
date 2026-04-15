@@ -30,16 +30,31 @@ let app = your_app.merge(nip34_router);
 ## With blossom-server
 
 ```bash
-cargo install blossom-server --features nip34
-
-blossom-server --nip34 --nip34-domain git.example.com
+cargo install blossom-server --features nip34 && \
+blossom-server --bind 127.0.0.1:3000 --base-url http://127.0.0.1:3000 --nip34-domain http://git.localhost
+OR
+cargo run \
+-p blossom-server \
+--features nip34 -- \
+--bind 127.0.0.1:3000 \
+--base-url http://127.0.0.1:3000 \
+--nip34-domain http://git.localhost
+THEN
+curl -v http://git.localhost:3000 #test
 ```
 
 This enables:
-- Nostr relay at `wss://git.example.com/` (WebSocket)
-- NIP-11 at `https://git.example.com/` (with `Accept: application/nostr+json`)
-- Git repos at `https://git.example.com/{npub}/{repo}.git`
+- Nostr relay at `ws://127.0.0.1:3000/` (WebSocket)
+- NIP-11 at `http://127.0.0.1:3000/` (with `Accept: application/nostr+json`)
+- Git repos at `http://127.0.0.1:3000/{npub}/{repo}.git`
 - PKARR `_nostr` TXT record for relay discovery (with `--pkarr`)
+
+For a local remote, use:
+
+```bash
+git remote add blossom-gnostr http://127.0.0.1:3000/<npub>/<repo>.git
+git push blossom-gnostr HEAD:<branch>
+```
 
 ## NIP-34 Event Kinds
 

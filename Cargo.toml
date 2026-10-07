@@ -109,7 +109,7 @@ opentelemetry_sdk = { version = "0.32.1", optional = true }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "grpc-tonic"], optional = true }
 
 # P2P transport (optional)
-iroh = { version = "1.0.3", optional = true }
+iroh = { version = "^1", optional = true }
 anyhow = { version = "1", optional = true }
 
 # PKARR discovery (optional)
